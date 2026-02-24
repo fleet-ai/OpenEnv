@@ -79,7 +79,15 @@ class FleetMCPTools:
             raise RuntimeError(f"All MCP clients failed to list tools: {errors}")
 
         if errors:
-            # Some clients failed but we got tools from others
+            # Some clients failed - fail if we got suspiciously few tools (partial result)
+            # Most Fleet envs have 10+ tools; getting only 1-2 suggests the main aggregator failed
+            # and we only got fallback tools (e.g., just the 'computer' tool from StreamableHTTP)
+            if len(tools) < 5:
+                raise RuntimeError(
+                    f"Partial MCP result: got only {len(tools)} tool(s), but some clients failed. "
+                    f"This likely means the MCP aggregator is down. Failures: {errors}"
+                )
+            # Got enough tools despite some failures - log warning but continue
             logger.warning(f"Some MCP clients failed to list tools: {errors}")
 
         return tools
