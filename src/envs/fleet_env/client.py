@@ -204,7 +204,7 @@ class FleetEnvClient(HTTPEnvClient[Action, Observation]):
 
         _logger = logging.getLogger(__name__)
 
-        _logger.info(f"Creating Fleet instance (async): env_key={env_key}, ttl={ttl_seconds}s")
+        _logger.info(f"Creating Fleet instance (async): env_key={env_key}, data_key={data_key_spec}, ttl={ttl_seconds}s")
         start = time.time()
 
         # Retry logic with async sleep (non-blocking)

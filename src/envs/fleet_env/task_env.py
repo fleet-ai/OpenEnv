@@ -170,10 +170,10 @@ class FleetTaskEnv:
 
         if not env_key:
             raise ValueError("Task config missing env_key")
+        if not env_version:
+            raise ValueError(f"Task config missing env_version for env_key={env_key}")
 
-        if env_version:
-            return f"{env_key}:{env_version}"
-        return env_key
+        return f"{env_key}:{env_version}"
 
     def _get_data_key(self) -> Optional[str]:
         """Get data_key from task config."""
