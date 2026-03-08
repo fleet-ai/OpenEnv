@@ -158,6 +158,9 @@ class FleetTaskEnv:
         self._reward_computed = False
         self.final_reward: Optional[float] = None
         self._submitted_answer: Optional[str] = None
+        self._tool_errors: List[str] = []
+        self._verifier_error: Optional[str] = None
+        self._verifier_stdout: Optional[str] = None
 
         # Set telemetry context so init failures are tracked with full context
         set_task_context(
@@ -196,6 +199,30 @@ class FleetTaskEnv:
     def env_version(self) -> str:
         """Get the environment version (e.g., 'v0.0.12')."""
         return self.task.get("env_version", "unknown")
+
+    @property
+    def verifier_code(self) -> Optional[str]:
+        """Get the verifier code for this task."""
+        return self.task.get("verifier_code") or self.task.get("verifier_func")
+
+    @property
+    def tool_errors(self) -> List[str]:
+        """Get accumulated tool errors from the current rollout."""
+        return self._tool_errors.copy()
+
+    @property
+    def verifier_error(self) -> Optional[str]:
+        """Get the verifier error from the last completed rollout."""
+        return self._verifier_error
+
+    @property
+    def verifier_stdout(self) -> Optional[str]:
+        """Get the verifier stdout from the last completed rollout.
+
+        Contains ERROR_ACCUMULATOR / SUCCESS_ACCUMULATOR blocks when
+        partial credit verifiers are used. Raw stdout from verifier execution.
+        """
+        return self._verifier_stdout
 
     def _build_env_spec(self) -> str:
         """Build env_key:version spec for Fleet.make()."""
@@ -315,6 +342,9 @@ class FleetTaskEnv:
         self._reward_computed = False
         self.final_reward = None
         self._submitted_answer = None
+        self._tool_errors = []
+        self._verifier_error = None
+        self._verifier_stdout = None
 
         # Reset the environment (use short timeout to avoid blocking on broken manager APIs)
         # reset() failure is non-fatal — env is up, just the manager API timed out
@@ -517,6 +547,7 @@ class FleetTaskEnv:
                 is_error, error_msg = _is_tool_error(tool_result)
                 if is_error:
                     info["tool_error"] = error_msg
+                    self._tool_errors.append(f"{tool_name}(): {error_msg[:500] if error_msg else 'unknown'}")
                     logger.warning(
                         f"[env={self.env_key}:{self.env_version}] step {self._step_count}/{self.max_steps} "
                         f"tool_error: {tool_name}() -> {error_msg[:200] if error_msg else 'unknown'}"
@@ -531,6 +562,7 @@ class FleetTaskEnv:
             except Exception as e:
                 info["tool_error"] = str(e)
                 tool_result = {"error": str(e)}
+                self._tool_errors.append(f"{tool_name}(): {str(e)[:500]}")
                 logger.warning(
                     f"[env={self.env_key}:{self.env_version}] step {self._step_count}/{self.max_steps} "
                     f"tool_call_failed: {tool_name}() -> {type(e).__name__}: {str(e)[:200]}"
@@ -651,6 +683,10 @@ class FleetTaskEnv:
                         verify_kwargs["final_answer"] = self._submitted_answer
                     response = await asyncio.to_thread(fleet_task.verify_detailed, fleet_env, **verify_kwargs)
 
+                    # Capture verifier stdout (contains ERROR/SUCCESS_ACCUMULATOR for partial credit)
+                    if hasattr(response, "stdout") and response.stdout:
+                        self._verifier_stdout = response.stdout
+
                     # Extract result from response
                     # response.success is bool, response.result is the verifier's return value (0.0 or 1.0)
                     if response.success and response.result is not None:
@@ -661,6 +697,10 @@ class FleetTaskEnv:
                     else:
                         # Verifier failed (exception or explicit failure)
                         score = 0.0
+                        self._verifier_error = f"Verifier returned success=False, result={response.result}"
+
+                    if score == 0.0 and response.success:
+                        self._verifier_error = "Verifier passed but returned 0.0 (task not completed)"
 
                     verifier_success = response.success
 
@@ -684,12 +724,14 @@ class FleetTaskEnv:
 
                 except ImportError as e:
                     logger.error(f"Fleet SDK not available for verifier execution: {e}")
+                    self._verifier_error = f"ImportError: {e}"
                     failure_reason = "import_error"
                 except Exception as e:
                     logger.error(
                         f"Verifier execution failed for task {self.task_key}: {e}\n"
                         f"Verifier code:\n{verifier_code}"
                     )
+                    self._verifier_error = str(e)[:1000]
                     fleet_exception(
                         "fleet_verifier_failed",
                         step_count=self._step_count,
@@ -710,6 +752,75 @@ class FleetTaskEnv:
         )
         self._rollout_completed_emitted = True
         return score
+
+    async def reset_for_hint_async(self, hint: str) -> Dict[str, Any]:
+        """Reset env state for a hinted rollout, reusing the provisioned instance.
+
+        Resets the environment database back to seed state and returns an
+        observation with the hint appended to the prompt. Does NOT re-provision
+        or re-fetch tools — reuses existing _orch and _tools handles.
+
+        Args:
+            hint: The hint text to append to the task prompt.
+
+        Returns:
+            Observation dict with hinted prompt.
+
+        Raises:
+            RuntimeError: If the environment has not been provisioned yet.
+        """
+        if self._orch is None or self._tools is None:
+            raise RuntimeError(
+                "Environment not provisioned. Call reset_async() before reset_for_hint_async()."
+            )
+
+        # Reset episode state
+        self._step_count = 0
+        self._done = False
+        self._tool_errors = []
+        self._verifier_error = None
+        self._verifier_stdout = None
+
+        # Reset env state (DB back to seed) — non-fatal if fails
+        if self._orch:
+            try:
+                saved_timeout = self._orch._timeout
+                self._orch._timeout = self.reset_timeout_s
+                try:
+                    self._orch.reset()
+                finally:
+                    self._orch._timeout = saved_timeout
+            except Exception as e:
+                logger.warning(
+                    f"[env={self.env_key}] Fleet env reset failed during hint reset: {e}"
+                )
+
+        hinted_prompt = f"{self.prompt}\n\nHere is a hint to help you:\n{hint}"
+
+        obs = {
+            "prompt": hinted_prompt,
+            "observation": {},
+            "step": 0,
+            "task_key": self.task_key,
+            "modality": self.modality,
+        }
+
+        if self._tools_cache:
+            obs["tools"] = self._tools_cache
+
+        # For computer_use, take initial screenshot
+        if self.modality == "computer_use" and self._tools:
+            try:
+                screenshot_result = await self._tools.call_tool(
+                    "computer", {"action": "screenshot"}
+                )
+                obs["initial_screenshot"] = screenshot_result
+            except Exception as e:
+                logger.warning(
+                    f"Task {self.task_key}: failed to capture initial screenshot on hint reset: {e}"
+                )
+
+        return obs
 
     def close(self):
         """Close the environment and cleanup resources.
@@ -752,6 +863,9 @@ class FleetTaskEnv:
             self._tools_cache = None
             self._done = True
             self._rollout_started = False
+            self._tool_errors = []
+            self._verifier_error = None
+            self._verifier_stdout = None
             clear_task_context()
 
     async def close_async(self):
@@ -779,6 +893,9 @@ class FleetTaskEnv:
             self._tools_cache = None
             self._done = True
             self._rollout_started = False
+            self._tool_errors = []
+            self._verifier_error = None
+            self._verifier_stdout = None
             clear_task_context()
 
     def __enter__(self):

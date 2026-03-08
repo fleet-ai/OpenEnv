@@ -14,6 +14,7 @@ from .task_env import FleetTaskEnv, make_fleet_task_env
 from .telemetry import configure_fleet_telemetry, set_task_context, clear_task_context
 from .trace import create_trace_job, upload_trace
 from .task_evaluator import TaskEvaluator, evaluate_task
+from .hint import HintGenerator, compute_hint_reward
 
 __all__ = [
     "FleetEnvClient",
@@ -32,4 +33,6 @@ __all__ = [
     "clear_task_context",
     "create_trace_job",
     "upload_trace",
+    "HintGenerator",
+    "compute_hint_reward",
 ]
