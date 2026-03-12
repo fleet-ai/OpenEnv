@@ -8,6 +8,7 @@ This module provides a task-oriented wrapper around FleetEnvClient that:
 4. Executes verifier for reward on episode completion
 """
 
+import asyncio
 import logging
 import os
 from typing import Any, Dict, List, Optional, Tuple
@@ -79,6 +80,8 @@ class FleetTaskEnv:
         self._step_count = 0
         self._done = False
         self._tools_cache: Optional[List[Dict]] = None
+        self._reward_computed = False
+        self.final_reward: Optional[float] = None
 
         # Create Fleet environment instance (provisions cloud resources)
         env_spec = self._build_env_spec()
@@ -190,6 +193,8 @@ class FleetTaskEnv:
         # Reset episode state
         self._step_count = 0
         self._done = False
+        self._reward_computed = False
+        self.final_reward = None
 
         # Reset the environment (use short timeout to avoid blocking on broken manager APIs)
         reset_metadata = {}
@@ -353,6 +358,7 @@ class FleetTaskEnv:
         reward = 0.0
         if self._done:
             reward = await self._compute_reward()
+            self._reward_computed = True
             info["reward_computed"] = True
 
         # Build observation
@@ -438,12 +444,47 @@ class FleetTaskEnv:
             return 0.0
 
     def close(self):
-        """Close the environment and cleanup resources."""
-        if self._orch:
-            try:
-                self._orch.close()
-            except Exception:
-                pass
+        """Close the environment and cleanup resources.
+
+        Runs the verifier if the episode ended without computing reward
+        (e.g., SkyRL stopped due to context overflow or its own max_turns).
+        """
+        try:
+            if not self._reward_computed and self._orch:
+                try:
+                    self.final_reward = asyncio.run(self._compute_reward())
+                    self._reward_computed = True
+                except RuntimeError:
+                    # Already inside a running event loop — caller should use close_async()
+                    pass
+        finally:
+            if self._orch:
+                try:
+                    self._orch.close()
+                except Exception:
+                    pass
+            self._orch = None
+            self._tools = None
+            self._tools_cache = None
+            self._done = True
+
+    async def close_async(self):
+        """Async close — runs verifier for orphaned rollouts and terminates instance.
+
+        If SkyRL ends the trajectory early (context overflow, its own max_turns),
+        the verifier never ran in step_async(). This runs it at close time so
+        the real reward is available via self.final_reward.
+        """
+        try:
+            if not self._reward_computed and self._orch:
+                self.final_reward = await self._compute_reward()
+                self._reward_computed = True
+        finally:
+            if self._orch:
+                try:
+                    self._orch.close()
+                except Exception:
+                    pass
             self._orch = None
             self._tools = None
             self._tools_cache = None
