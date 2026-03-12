@@ -452,11 +452,19 @@ class FleetTaskEnv:
         try:
             if not self._reward_computed and self._orch:
                 try:
+                    running_loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    running_loop = None
+
+                if running_loop and running_loop.is_running():
+                    logger.warning(
+                        "Task %s: close() called from a running event loop; "
+                        "cannot compute final reward synchronously. Use await close_async().",
+                        self.task_key,
+                    )
+                else:
                     self.final_reward = asyncio.run(self._compute_reward())
                     self._reward_computed = True
-                except RuntimeError:
-                    # Already inside a running event loop — caller should use close_async()
-                    pass
         finally:
             if self._orch:
                 try:
