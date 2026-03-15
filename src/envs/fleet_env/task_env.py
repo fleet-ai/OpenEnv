@@ -777,6 +777,9 @@ class FleetTaskEnv:
         # Reset episode state
         self._step_count = 0
         self._done = False
+        self._reward_computed = False
+        self.final_reward = None
+        self._submitted_answer = None
         self._tool_errors = []
         self._verifier_error = None
         self._verifier_stdout = None
@@ -787,7 +790,7 @@ class FleetTaskEnv:
                 saved_timeout = self._orch._timeout
                 self._orch._timeout = self.reset_timeout_s
                 try:
-                    self._orch.reset()
+                    await self._orch.reset_async()
                 finally:
                     self._orch._timeout = saved_timeout
             except Exception as e:
