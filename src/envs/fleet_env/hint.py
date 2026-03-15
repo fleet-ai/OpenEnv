@@ -210,8 +210,6 @@ class HintGenerator:
         Returns:
             A concise hint string (single paragraph).
         """
-        import litellm
-
         tool_errors_section = _format_tool_errors(tool_errors or [])
         verifier_feedback_section = _format_verifier_feedback(verifier_stdout)
 
@@ -252,8 +250,6 @@ class HintGenerator:
         Returns:
             A concise hint string (single paragraph).
         """
-        import litellm
-
         tool_errors_section = _format_tool_errors(tool_errors or [])
         verifier_error_section = verifier_error or "Verifier did not report a specific error."
         verifier_feedback_section = _format_verifier_feedback(verifier_stdout)
