@@ -783,6 +783,10 @@ class FleetTaskEnv:
         self._tool_errors = []
         self._verifier_error = None
         self._verifier_stdout = None
+        self._rollout_started = True
+        self._rollout_completed_emitted = False
+
+        fleet_info("fleet_rollout_started", rollout_type="hinted")
 
         # Reset env state (DB back to seed) — non-fatal if fails
         if self._orch:
