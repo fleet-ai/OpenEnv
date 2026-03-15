@@ -1,16 +1,23 @@
 """Hint generation for trace-aware solver RL training.
 
 Generates concise hints from task context and rollout errors to rescue
-GRPO signal on hard tasks. Follows the Self-Hinting paper approach.
+GRPO signal on hard tasks. Follows the Self-Hinting paper approach
+and RLTF (Song et al., 2025) insight that text feedback is richer than
+scalar reward for RL post-training.
 
 Three hint modes:
 - Option B: generate_hint() with verifier code + tool errors + chat_history
 - Option C: generate_hint() with verifier code only (no tool errors / chat_history)
 - Option D: generate_hint_from_errors() with tool errors + verifier error only
+
+All modes accept optional verifier_stdout containing per-check pass/fail
+details (ERROR_ACCUMULATOR / SUCCESS_ACCUMULATOR) for dense feedback signal.
 """
 
+import ast
 import logging
-from typing import Any, Dict, List, Optional
+import re
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +33,7 @@ Rules:
 - DO point out which tools to use, what parameters matter, or what the agent misunderstood.
 - If the errors show validation failures, hint at the correct parameter format or valid options.
 - If the errors show the agent used wrong tools, hint at which tools are relevant.
+- If verifier feedback shows which checks passed and which failed, focus the hint on the failed checks.
 - If there are no errors (agent just didn't finish), hint at the general strategy.
 - Keep it to a single paragraph. No bullet points, no numbered steps."""
 
@@ -40,7 +48,7 @@ HINT_USER_TEMPLATE = """\
 
 ## Tool Errors from Failed Attempt
 {tool_errors_section}
-
+{verifier_feedback_section}
 Generate a single concise hint paragraph."""
 
 ERROR_HINT_SYSTEM_PROMPT = """\
@@ -51,8 +59,9 @@ the correct approach.
 
 Rules:
 - Do NOT give the full solution or exact tool call sequence.
-- Synthesize both tool errors and verifier failures into actionable guidance.
+- Synthesize tool errors, verifier failures, and per-check feedback into actionable guidance.
 - If tool errors show validation failures, hint at correct formats or valid options.
+- If verifier feedback shows which checks passed vs failed, focus on what's still missing.
 - If the verifier failed, hint at what state changes the task requires.
 - Keep it to a single paragraph. No bullet points, no numbered steps."""
 
@@ -65,7 +74,7 @@ ERROR_HINT_USER_TEMPLATE = """\
 
 ## Verifier Failure
 {verifier_error_section}
-
+{verifier_feedback_section}
 Generate a single concise hint paragraph."""
 
 GENERIC_FALLBACK_HINT = (
@@ -73,6 +82,74 @@ GENERIC_FALLBACK_HINT = (
     "they require, and pay attention to the exact formats and valid options "
     "for each parameter."
 )
+
+
+def _parse_verifier_stdout(stdout: str) -> Tuple[List[str], List[str]]:
+    """Parse ERROR_ACCUMULATOR / SUCCESS_ACCUMULATOR from verifier stdout.
+
+    Returns:
+        (errors, successes) — lists of check descriptions from verifier output.
+    """
+    errors: List[str] = []
+    successes: List[str] = []
+
+    err_match = re.search(
+        r">>> ERROR_ACCUMULATOR >>>\n(.+?)\n<<< ERROR_ACCUMULATOR <<<",
+        stdout,
+        re.DOTALL,
+    )
+    suc_match = re.search(
+        r">>> SUCCESS_ACCUMULATOR >>>\n(.+?)\n<<< SUCCESS_ACCUMULATOR <<<",
+        stdout,
+        re.DOTALL,
+    )
+
+    if err_match:
+        try:
+            errors = [str(e)[:200] for e in ast.literal_eval(err_match.group(1))]
+        except Exception:
+            errors = [err_match.group(1)[:500]]
+
+    if suc_match:
+        try:
+            successes = [str(s)[:200] for s in ast.literal_eval(suc_match.group(1))]
+        except Exception:
+            successes = [suc_match.group(1)[:500]]
+
+    return errors, successes
+
+
+def _format_verifier_feedback(verifier_stdout: Optional[str]) -> str:
+    """Format verifier stdout into structured feedback for the hint LLM.
+
+    Parses per-check pass/fail accumulators into a readable section.
+    If no accumulators found, returns raw stdout (truncated).
+    """
+    if not verifier_stdout:
+        return ""
+
+    errors, successes = _parse_verifier_stdout(verifier_stdout)
+
+    if not errors and not successes:
+        # No accumulators — include raw stdout if it has useful content
+        stripped = verifier_stdout.strip()
+        if stripped and len(stripped) > 10:
+            return f"\n## Verifier Output\n{stripped[:1000]}\n"
+        return ""
+
+    parts = ["\n## Verifier Check Results"]
+    if successes:
+        parts.append(f"Passed ({len(successes)}):")
+        for s in successes[:10]:
+            parts.append(f"  + {s}")
+    if errors:
+        parts.append(f"Failed ({len(errors)}):")
+        for e in errors[:10]:
+            parts.append(f"  - {e}")
+
+    total = len(errors) + len(successes)
+    parts.append(f"Score: {len(successes)}/{total} checks passed")
+    return "\n".join(parts) + "\n"
 
 
 def _format_tool_errors(tool_errors: List[str]) -> str:
@@ -115,6 +192,7 @@ class HintGenerator:
         verifier_code: str,
         tool_errors: Optional[List[str]] = None,
         chat_history: Optional[List[Dict[str, Any]]] = None,
+        verifier_stdout: Optional[str] = None,
     ) -> str:
         """Generate a hint from verifier code + task context (Options B/C).
 
@@ -126,6 +204,8 @@ class HintGenerator:
             verifier_code: Python verifier source code.
             tool_errors: Tool error messages from raw rollout (Option B).
             chat_history: Chat history from raw rollout (Option B, reserved).
+            verifier_stdout: Raw stdout from verifier execution, may contain
+                ERROR_ACCUMULATOR / SUCCESS_ACCUMULATOR with per-check details.
 
         Returns:
             A concise hint string (single paragraph).
@@ -133,11 +213,13 @@ class HintGenerator:
         import litellm
 
         tool_errors_section = _format_tool_errors(tool_errors or [])
+        verifier_feedback_section = _format_verifier_feedback(verifier_stdout)
 
         user_content = HINT_USER_TEMPLATE.format(
             prompt=prompt,
             verifier_code=verifier_code[:3000],
             tool_errors_section=tool_errors_section,
+            verifier_feedback_section=verifier_feedback_section,
         )
 
         messages = [
@@ -152,16 +234,20 @@ class HintGenerator:
         prompt: str,
         tool_errors: Optional[List[str]] = None,
         verifier_error: Optional[str] = None,
+        verifier_stdout: Optional[str] = None,
     ) -> str:
         """Generate a hint from tool errors + verifier failure (Option D).
 
         Lighter than generate_hint() — no verifier source code or chat history.
-        The LLM synthesizes both failure signals into a coherent hint.
+        The LLM synthesizes tool errors, verifier failure, and per-check
+        feedback (from stdout accumulators) into a coherent hint.
 
         Args:
             prompt: The task prompt.
             tool_errors: Tool error messages from raw rollout.
             verifier_error: Verifier execution error message.
+            verifier_stdout: Raw stdout from verifier execution, may contain
+                per-check pass/fail details (ERROR/SUCCESS_ACCUMULATOR).
 
         Returns:
             A concise hint string (single paragraph).
@@ -170,11 +256,13 @@ class HintGenerator:
 
         tool_errors_section = _format_tool_errors(tool_errors or [])
         verifier_error_section = verifier_error or "Verifier did not report a specific error."
+        verifier_feedback_section = _format_verifier_feedback(verifier_stdout)
 
         user_content = ERROR_HINT_USER_TEMPLATE.format(
             prompt=prompt,
             tool_errors_section=tool_errors_section,
             verifier_error_section=verifier_error_section,
+            verifier_feedback_section=verifier_feedback_section,
         )
 
         messages = [
