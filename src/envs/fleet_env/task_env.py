@@ -153,6 +153,8 @@ class FleetTaskEnv:
             raise ValueError(
                 "Fleet API key required (pass api_key or set FLEET_API_KEY)"
             )
+        if not self.task.get("env_key"):
+            raise ValueError("Task config missing env_key")
 
         self._step_count = 0
         self._done = False
