@@ -9,6 +9,7 @@
 import asyncio
 import dataclasses
 import logging
+import time
 from typing import Any, Dict, List, Optional, Tuple, Type
 
 try:
@@ -30,6 +31,15 @@ from .telemetry import fleet_error, fleet_warning, fleet_info
 class FleetEnvClient(HTTPEnvClient[Action, Observation]):
     """Orchestrator-facing client for Fleet-hosted environments (HTTP only)."""
 
+    _MAX_FLEET_MAKE_RETRIES = 3
+    _FLEET_MAKE_RETRY_BASE_DELAY_S = 2.0
+    _TRANSIENT_FLEET_ERROR_HINTS = (
+        "health check",
+        "timeout",
+        "connection",
+        "temporarily",
+    )
+
     def __init__(
         self,
         base_url: str,
@@ -47,14 +57,103 @@ class FleetEnvClient(HTTPEnvClient[Action, Observation]):
         self._api_key = api_key
         self._mcp_urls = mcp_urls
 
+    @staticmethod
+    def _build_data_key_spec(
+        data_key: Optional[str], data_version: Optional[str]
+    ) -> Optional[str]:
+        # Fleet SDK expects data_key in "key:version" format.
+        if not data_key:
+            return None
+        return f"{data_key}:{data_version}" if data_version else data_key
+
+    @staticmethod
+    def _sdk_image_type(image_type: str) -> Optional[str]:
+        # Fleet SDK expects image_type=None for standard images.
+        return image_type if image_type == "mcp" else None
+
+    @staticmethod
+    def _get_mcp_urls(root: str, image_type: str) -> Tuple[str, ...]:
+        # Pick MCP endpoint based on modality:
+        # - computer_use (image_type="mcp"): aggregator on port 8081
+        # - tool_use: per-env MCP server on port 3003
+        if image_type == "mcp":
+            return (f"{root}api/v1/mcp",)
+        return (f"{root}mcp",)
+
+    @classmethod
+    def _retry_delay_on_make_error(
+        cls,
+        *,
+        env_key: str,
+        attempt: int,
+        error: Exception,
+        logger: logging.Logger,
+        client_name: str,
+    ) -> Optional[float]:
+        max_retries = cls._MAX_FLEET_MAKE_RETRIES
+        error_msg = str(error).lower()
+        is_transient = any(
+            hint in error_msg for hint in cls._TRANSIENT_FLEET_ERROR_HINTS
+        )
+        if attempt < max_retries - 1 and is_transient:
+            delay = cls._FLEET_MAKE_RETRY_BASE_DELAY_S * (2**attempt)
+            logger.warning(
+                f"[env={env_key}] {client_name}.make() failed (attempt {attempt + 1}/{max_retries}): {error}. "
+                f"Retrying in {delay:.1f}s..."
+            )
+            fleet_warning(
+                "fleet_make_retry",
+                attempt=attempt + 1,
+                max_retries=max_retries,
+                error_type=type(error).__name__,
+                error_message=str(error),
+                retry_delay_s=delay,
+            )
+            return delay
+
+        logger.error(
+            f"[env={env_key}] {client_name}.make() failed after {attempt + 1} attempt(s): {error}"
+        )
+        fleet_error(
+            "fleet_make_failed",
+            attempt=attempt + 1,
+            max_retries=max_retries,
+            error_type=type(error).__name__,
+            error_message=str(error),
+        )
+        return None
+
+    @staticmethod
+    def _emit_provisioning_completed(elapsed: float, instance_id: Any) -> None:
+        fleet_info(
+            "fleet_provisioning_completed",
+            provisioning_time_s=round(elapsed, 1),
+            instance_id=instance_id,
+        )
+
+    @classmethod
+    def _build_orchestrator_and_tools(
+        cls, env: Any, api_key: str, image_type: str, **kwargs: Any
+    ) -> Tuple["FleetEnvClient", FleetMCPTools]:
+        mcp_urls = cls._get_mcp_urls(root=env.urls.root, image_type=image_type)
+        orch = cls(
+            base_url=env.urls.manager.api,
+            fleet_env_handle=env,
+            api_key=api_key,
+            mcp_urls=mcp_urls,
+            **kwargs,
+        )
+        tools = FleetMCPTools(api_key=api_key, mcp_urls=mcp_urls)
+        return orch, tools
+
     @classmethod
     def from_fleet(
         cls: Type["FleetEnvClient"],
         api_key: str,
         env_key: str,
-        data_key: str,
-        data_version: str,
-        image_type: str,
+        data_key: Optional[str] = None,
+        data_version: Optional[str] = None,
+        image_type: str = "standard",
         region: Optional[str] = None,
         ttl_seconds: Optional[int] = 3600,
         env_variables: Optional[Dict[str, Any]] = None,
@@ -72,106 +171,56 @@ class FleetEnvClient(HTTPEnvClient[Action, Observation]):
         # This ensures .close() and other lifecycle methods are synchronous.
         fleet = Fleet(api_key=api_key)
 
-        # Fleet SDK expects data_key in "key:version" format
-        data_key_spec = None
-        if data_key:
-            if data_version:
-                data_key_spec = f"{data_key}:{data_version}"
-            else:
-                data_key_spec = data_key
-
-        import time
-        import logging
-
+        data_key_spec = cls._build_data_key_spec(data_key=data_key, data_version=data_version)
         _logger = logging.getLogger(__name__)
 
         _logger.info(f"Creating Fleet instance: env_key={env_key}, ttl={ttl_seconds}s")
         start = time.time()
 
-        # Retry logic for transient Fleet API failures (e.g., health check failures)
-        max_retries = 3
-        retry_base_delay = 2.0  # seconds
+        # Retry logic for transient Fleet API failures (e.g., health check failures).
+        max_retries = cls._MAX_FLEET_MAKE_RETRIES
         env = None
 
         for attempt in range(max_retries):
             try:
-                # Fleet SDK expects image_type=None for standard images
-                sdk_image_type = image_type if image_type == "mcp" else None
                 env = fleet.make(
                     env_key=env_key,
                     region=region,
                     ttl_seconds=ttl_seconds,
                     env_variables=env_variables,
-                    image_type=sdk_image_type,
+                    image_type=cls._sdk_image_type(image_type),
                     data_key=data_key_spec,
                 )
                 break  # Success
             except Exception as e:
-                error_msg = str(e)
-                # Retry on transient errors (health check failures, timeouts, etc.)
-                is_transient = any(
-                    x in error_msg.lower()
-                    for x in ["health check", "timeout", "connection", "temporarily"]
+                delay = cls._retry_delay_on_make_error(
+                    env_key=env_key,
+                    attempt=attempt,
+                    error=e,
+                    logger=_logger,
+                    client_name="Fleet",
                 )
-                if attempt < max_retries - 1 and is_transient:
-                    delay = retry_base_delay * (2**attempt)
-                    _logger.warning(
-                        f"[env={env_key}] Fleet.make() failed (attempt {attempt + 1}/{max_retries}): {e}. "
-                        f"Retrying in {delay:.1f}s..."
-                    )
-                    fleet_warning(
-                        "fleet_make_retry",
-                        attempt=attempt + 1,
-                        max_retries=max_retries,
-                        error_type=type(e).__name__,
-                        error_message=str(e),
-                        retry_delay_s=delay,
-                    )
-                    time.sleep(delay)
-                else:
-                    _logger.error(
-                        f"[env={env_key}] Fleet.make() failed after {attempt + 1} attempt(s): {e}"
-                    )
-                    fleet_error(
-                        "fleet_make_failed",
-                        attempt=attempt + 1,
-                        max_retries=max_retries,
-                        error_type=type(e).__name__,
-                        error_message=str(e),
-                    )
+                if delay is None:
                     raise
+                time.sleep(delay)
 
         elapsed = time.time() - start
         instance_id = getattr(env, "instance_id", "unknown")
         _logger.info(f"Fleet instance ready in {elapsed:.1f}s: {instance_id}")
+        cls._emit_provisioning_completed(elapsed=elapsed, instance_id=instance_id)
 
-        root = env.urls.root
-        # Pick MCP endpoint based on modality:
-        # - computer_use: aggregator on port 8081 (has computer tool + API tools)
-        # - tool_use: per-env MCP server on port 3003 (API tools only)
-        if image_type == "mcp":
-            mcp_urls = (f"{root}api/v1/mcp",)
-        else:
-            mcp_urls = (f"{root}mcp",)
-
-        orch = cls(
-            base_url=env.urls.manager.api,
-            fleet_env_handle=env,
-            api_key=api_key,
-            mcp_urls=mcp_urls,
-            **kwargs,
+        return cls._build_orchestrator_and_tools(
+            env=env, api_key=api_key, image_type=image_type, **kwargs
         )
-        tools = FleetMCPTools(api_key=api_key, mcp_urls=mcp_urls)
-        return orch, tools
 
     @classmethod
     async def from_fleet_async(
         cls: Type["FleetEnvClient"],
         api_key: str,
         env_key: str,
-        data_key: str,
-        data_version: str,
-        image_type: str,
+        data_key: Optional[str] = None,
+        data_version: Optional[str] = None,
+        image_type: str = "standard",
         region: Optional[str] = None,
         ttl_seconds: Optional[int] = 3600,
         env_variables: Optional[Dict[str, Any]] = None,
@@ -192,17 +241,7 @@ class FleetEnvClient(HTTPEnvClient[Action, Observation]):
 
         async_fleet = AsyncFleet(api_key=api_key)
 
-        # Fleet SDK expects data_key in "key:version" format
-        data_key_spec = None
-        if data_key:
-            if data_version:
-                data_key_spec = f"{data_key}:{data_version}"
-            else:
-                data_key_spec = data_key
-
-        import time
-        import logging
-
+        data_key_spec = cls._build_data_key_spec(data_key=data_key, data_version=data_version)
         _logger = logging.getLogger(__name__)
 
         _logger.info(
@@ -210,13 +249,9 @@ class FleetEnvClient(HTTPEnvClient[Action, Observation]):
         )
         start = time.time()
 
-        # Retry logic with async sleep (non-blocking)
-        max_retries = 3
-        retry_base_delay = 2.0  # seconds
+        # Retry logic with async sleep (non-blocking).
+        max_retries = cls._MAX_FLEET_MAKE_RETRIES
         env = None
-
-        # Fleet SDK expects image_type=None for standard images
-        sdk_image_type = image_type if image_type == "mcp" else None
 
         for attempt in range(max_retries):
             try:
@@ -225,72 +260,30 @@ class FleetEnvClient(HTTPEnvClient[Action, Observation]):
                     region=region,
                     ttl_seconds=ttl_seconds,
                     env_variables=env_variables,
-                    image_type=sdk_image_type,
+                    image_type=cls._sdk_image_type(image_type),
                     data_key=data_key_spec,
                 )
                 break  # Success
             except Exception as e:
-                error_msg = str(e)
-                # Retry on transient errors (health check failures, timeouts, etc.)
-                is_transient = any(
-                    x in error_msg.lower()
-                    for x in ["health check", "timeout", "connection", "temporarily"]
+                delay = cls._retry_delay_on_make_error(
+                    env_key=env_key,
+                    attempt=attempt,
+                    error=e,
+                    logger=_logger,
+                    client_name="AsyncFleet",
                 )
-                if attempt < max_retries - 1 and is_transient:
-                    delay = retry_base_delay * (2**attempt)
-                    _logger.warning(
-                        f"[env={env_key}] AsyncFleet.make() failed (attempt {attempt + 1}/{max_retries}): {e}. "
-                        f"Retrying in {delay:.1f}s..."
-                    )
-                    fleet_warning(
-                        "fleet_make_retry",
-                        attempt=attempt + 1,
-                        max_retries=max_retries,
-                        error_type=type(e).__name__,
-                        error_message=str(e),
-                        retry_delay_s=delay,
-                    )
-                    await asyncio.sleep(delay)
-                else:
-                    _logger.error(
-                        f"[env={env_key}] AsyncFleet.make() failed after {attempt + 1} attempt(s): {e}"
-                    )
-                    fleet_error(
-                        "fleet_make_failed",
-                        attempt=attempt + 1,
-                        max_retries=max_retries,
-                        error_type=type(e).__name__,
-                        error_message=str(e),
-                    )
+                if delay is None:
                     raise
+                await asyncio.sleep(delay)
 
         elapsed = time.time() - start
         instance_id = getattr(env, "instance_id", "unknown")
         _logger.info(f"Fleet instance ready (async) in {elapsed:.1f}s: {instance_id}")
-        fleet_info(
-            "fleet_provisioning_completed",
-            provisioning_time_s=round(elapsed, 1),
-            instance_id=instance_id,
-        )
+        cls._emit_provisioning_completed(elapsed=elapsed, instance_id=instance_id)
 
-        root = env.urls.root
-        # Pick MCP endpoint based on modality:
-        # - computer_use (image_type="mcp"): aggregator on port 8081 (has computer tool + API tools)
-        # - tool_use: per-env MCP server on port 3003 (API tools only)
-        if image_type == "mcp":
-            mcp_urls = (f"{root}api/v1/mcp",)
-        else:
-            mcp_urls = (f"{root}mcp",)
-
-        orch = cls(
-            base_url=env.urls.manager.api,
-            fleet_env_handle=env,
-            api_key=api_key,
-            mcp_urls=mcp_urls,
-            **kwargs,
+        return cls._build_orchestrator_and_tools(
+            env=env, api_key=api_key, image_type=image_type, **kwargs
         )
-        tools = FleetMCPTools(api_key=api_key, mcp_urls=mcp_urls)
-        return orch, tools
 
     # ------------------------------------------------------------------
     # Database query methods (delegate to Fleet SDK's SQLiteResource)
