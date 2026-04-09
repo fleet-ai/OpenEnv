@@ -122,6 +122,7 @@ class GymAnythingEnvClient:
     async def step_async(self, action: Dict[str, Any]) -> Tuple[Dict, float, bool, Dict]:
         """Execute action, return (obs, reward, done, info)."""
         self._step_count += 1
+        max_steps_reached = self._step_count >= self.max_steps
         is_done = action.get("done", False)
 
         tool_name = action.get("tool", "")
@@ -148,11 +149,13 @@ class GymAnythingEnvClient:
                 {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{screenshot}"}}
             ]
 
+        done = done or is_done or max_steps_reached
+
         # Normalize reward from 0-100 to 0-1
         if done and "verifier" in info:
             reward = info["verifier"].get("score", 0) / 100.0
 
-        return observation, reward, done or is_done, info
+        return observation, reward, done, info
 
     def close(self):
         if self.ga_env:
