@@ -110,15 +110,22 @@ def _extract_service_prefix(tool_name: str) -> str:
 
     Convention: service_toolname or service-toolname.
     E.g. 'ramp_execute_query' -> 'ramp', 'hubspot_relay-create-company' -> 'hubspot'.
-    Falls back to the full name if no separator found.
+
+    For single-service envs where tools have no prefix (e.g. 'addIssueComment',
+    'getVaultSpaces'), returns None to signal no meaningful grouping.
     """
-    # Try underscore first (most common)
+    # Try underscore first (most common: ramp_execute_query, outlook_send_email)
     if "_" in tool_name:
-        return tool_name.split("_")[0]
-    # Try hyphen
-    if "-" in tool_name:
-        return tool_name.split("-")[0]
-    return tool_name
+        prefix = tool_name.split("_")[0]
+        # Reject verb-like prefixes that aren't real service names
+        # (e.g., 'list_emails' -> 'list', 'get_post_content' -> 'get')
+        verbs = {"get", "set", "list", "create", "update", "delete", "search",
+                 "add", "remove", "send", "view", "move", "copy", "find", "check",
+                 "cancel", "accept", "decline", "forward", "reply", "archive",
+                 "mark", "load", "export", "import", "submit", "close", "open"}
+        if prefix.lower() not in verbs:
+            return prefix
+    return None
 
 
 def _extract_description(tool: Dict[str, Any]) -> str:
@@ -127,6 +134,8 @@ def _extract_description(tool: Dict[str, Any]) -> str:
     desc = func.get("description", "")
     # Strip the [Service (Alias)] prefix that Fleet tools use
     desc = re.sub(r"^\[.*?\]\s*", "", desc)
+    # Take first line only (many Fleet descriptions have multi-line details)
+    desc = desc.split("\n")[0].strip()
     # Take first sentence only
     if ". " in desc:
         desc = desc[: desc.index(". ") + 1]
@@ -152,6 +161,7 @@ class ToolIndex:
         self._tools_by_name: Dict[str, Dict[str, Any]] = {}
         self._services: Dict[str, List[str]] = defaultdict(list)
         self._descriptions: Dict[str, str] = {}
+        self._ungrouped: List[str] = []
 
         for tool in tools:
             func = tool.get("function", tool)
@@ -163,7 +173,22 @@ class ToolIndex:
             self._descriptions[name] = _extract_description(tool)
 
             service = _extract_service_prefix(name)
-            self._services[service].append(name)
+            if service is not None:
+                self._services[service].append(name)
+            else:
+                self._ungrouped.append(name)
+
+        # If most tools are ungrouped, put them all in one bucket
+        if len(self._ungrouped) > len(self._tools_by_name) * 0.5:
+            self._services["tools"] = (
+                self._ungrouped
+                + [n for names in self._services.values() for n in names]
+            )
+            self._services = defaultdict(list, {"tools": self._services["tools"]})
+            self._ungrouped = []
+        elif self._ungrouped:
+            # A few ungrouped tools alongside real services — add as "other"
+            self._services["other"] = self._ungrouped
 
     @property
     def tool_count(self) -> int:
@@ -180,18 +205,36 @@ class ToolIndex:
     def search(self, query: str, limit: int = 15) -> List[Dict[str, str]]:
         """Search tools by keyword in name and description.
 
+        Matches the full query as a substring, and also matches individual
+        words from the query for partial/fuzzy matching.
+
         Returns list of {name, description} dicts, sorted by relevance.
         """
         query_lower = query.lower()
+        # Split query into words for partial matching
+        query_words = [w for w in re.split(r"[\s_\-]+", query_lower) if len(w) >= 2]
         results = []
 
         for name, desc in self._descriptions.items():
-            # Score: name match is stronger than description match
+            name_lower = name.lower()
+            desc_lower = desc.lower()
             score = 0
-            if query_lower in name.lower():
+
+            # Exact substring match (strongest signal)
+            if query_lower in name_lower:
+                score += 4
+            if query_lower in desc_lower:
                 score += 2
-            if query_lower in desc.lower():
-                score += 1
+
+            # Per-word matching (weaker but catches partial names)
+            if score == 0 and query_words:
+                word_hits = sum(
+                    1 for w in query_words
+                    if w in name_lower or w in desc_lower
+                )
+                if word_hits > 0:
+                    score = word_hits
+
             if score > 0:
                 results.append((score, name, desc))
 
