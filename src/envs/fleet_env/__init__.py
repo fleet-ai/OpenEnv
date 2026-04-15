@@ -8,6 +8,7 @@
 
 from .client import FleetEnvClient
 from .context_manager import CONTEXT_TOOLS, CONTEXT_TOOL_NAMES, ContextManager
+from .meta_tools import META_TOOLS, META_TOOL_NAMES, MetaToolHandler, ToolIndex
 from .mcp_tools import FleetMCPTools
 from .models import CallToolAction, ListToolsAction
 from .task_env import FleetTaskEnv, make_fleet_task_env
@@ -27,6 +28,10 @@ __all__ = [
     "ContextManager",
     "CONTEXT_TOOLS",
     "CONTEXT_TOOL_NAMES",
+    "MetaToolHandler",
+    "ToolIndex",
+    "META_TOOLS",
+    "META_TOOL_NAMES",
     "configure_fleet_telemetry",
     "set_task_context",
     "clear_task_context",
