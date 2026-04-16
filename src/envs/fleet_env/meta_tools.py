@@ -129,7 +129,7 @@ def _extract_service_prefix(tool_name: str) -> str:
 
 
 def _extract_description(tool: Dict[str, Any]) -> str:
-    """Extract a clean one-line description from a tool definition."""
+    """Extract a clean one-line description for compact summaries."""
     func = tool.get("function", tool)
     desc = func.get("description", "")
     # Strip the [Service (Alias)] prefix that Fleet tools use
@@ -142,6 +142,21 @@ def _extract_description(tool: Dict[str, Any]) -> str:
     # Cap length
     if len(desc) > 120:
         desc = desc[:117] + "..."
+    return desc
+
+
+def _extract_full_description(tool: Dict[str, Any]) -> str:
+    """Extract the full description for search results.
+
+    Preserves behavioral details that distinguish similar tools.
+    Capped at 300 chars to prevent search results from becoming too large.
+    """
+    func = tool.get("function", tool)
+    desc = func.get("description", "")
+    desc = re.sub(r"^\[.*?\]\s*", "", desc)
+    desc = desc.strip()
+    if len(desc) > 300:
+        desc = desc[:297] + "..."
     return desc
 
 
@@ -160,7 +175,8 @@ class ToolIndex:
         """
         self._tools_by_name: Dict[str, Dict[str, Any]] = {}
         self._services: Dict[str, List[str]] = defaultdict(list)
-        self._descriptions: Dict[str, str] = {}
+        self._descriptions: Dict[str, str] = {}  # one-liner for summaries
+        self._full_descriptions: Dict[str, str] = {}  # full text for search results
         self._ungrouped: List[str] = []
 
         for tool in tools:
@@ -171,6 +187,7 @@ class ToolIndex:
 
             self._tools_by_name[name] = tool
             self._descriptions[name] = _extract_description(tool)
+            self._full_descriptions[name] = _extract_full_description(tool)
 
             service = _extract_service_prefix(name)
             if service is not None:
@@ -206,7 +223,9 @@ class ToolIndex:
         """Search tools by keyword in name and description.
 
         Matches the full query as a substring, and also matches individual
-        words from the query for partial/fuzzy matching.
+        words from the query for partial/fuzzy matching. Searches against
+        full descriptions for better recall, returns full descriptions
+        so the model can distinguish similar tools before committing.
 
         Returns list of {name, description} dicts, sorted by relevance.
         """
@@ -215,28 +234,29 @@ class ToolIndex:
         query_words = [w for w in re.split(r"[\s_\-]+", query_lower) if len(w) >= 2]
         results = []
 
-        for name, desc in self._descriptions.items():
+        for name in self._tools_by_name:
             name_lower = name.lower()
-            desc_lower = desc.lower()
+            full_desc_lower = self._full_descriptions.get(name, "").lower()
             score = 0
 
             # Exact substring match (strongest signal)
             if query_lower in name_lower:
                 score += 4
-            if query_lower in desc_lower:
+            if query_lower in full_desc_lower:
                 score += 2
 
             # Per-word matching (weaker but catches partial names)
             if score == 0 and query_words:
                 word_hits = sum(
                     1 for w in query_words
-                    if w in name_lower or w in desc_lower
+                    if w in name_lower or w in full_desc_lower
                 )
                 if word_hits > 0:
                     score = word_hits
 
             if score > 0:
-                results.append((score, name, desc))
+                full_desc = self._full_descriptions.get(name, "")
+                results.append((score, name, full_desc))
 
         results.sort(key=lambda x: (-x[0], x[1]))
         return [{"name": r[1], "description": r[2]} for r in results[:limit]]
