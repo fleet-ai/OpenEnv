@@ -61,7 +61,8 @@ META_TOOLS = [
             "name": "get_tool_schema",
             "description": (
                 "Get the full parameter schema for a specific tool. "
-                "Call this before using a tool to see its exact parameters."
+                "Only needed when parameter signatures from search_tools "
+                "are not sufficient — most tools can be called directly."
             ),
             "parameters": {
                 "type": "object",
@@ -160,6 +161,28 @@ def _extract_full_description(tool: Dict[str, Any]) -> str:
     return desc
 
 
+def _extract_param_signature(tool: Dict[str, Any]) -> str:
+    """Extract a compact parameter signature from a tool schema.
+
+    Returns a string like "folder: string, limit: integer, skip: integer"
+    so the model can call the tool directly without fetching the full schema.
+    """
+    func = tool.get("function", tool)
+    params = func.get("parameters", {})
+    props = params.get("properties", {})
+    required = set(params.get("required", []))
+
+    if not props:
+        return ""
+
+    parts = []
+    for name, spec in props.items():
+        ptype = spec.get("type", "any")
+        suffix = "" if name in required else "?"
+        parts.append(f"{name}{suffix}: {ptype}")
+    return ", ".join(parts)
+
+
 class ToolIndex:
     """Indexes tool schemas for on-demand retrieval.
 
@@ -177,6 +200,7 @@ class ToolIndex:
         self._services: Dict[str, List[str]] = defaultdict(list)
         self._descriptions: Dict[str, str] = {}  # one-liner for summaries
         self._full_descriptions: Dict[str, str] = {}  # full text for search results
+        self._param_signatures: Dict[str, str] = {}  # compact param signatures
         self._ungrouped: List[str] = []
 
         for tool in tools:
@@ -188,6 +212,7 @@ class ToolIndex:
             self._tools_by_name[name] = tool
             self._descriptions[name] = _extract_description(tool)
             self._full_descriptions[name] = _extract_full_description(tool)
+            self._param_signatures[name] = _extract_param_signature(tool)
 
             service = _extract_service_prefix(name)
             if service is not None:
@@ -227,7 +252,9 @@ class ToolIndex:
         full descriptions for better recall, returns full descriptions
         so the model can distinguish similar tools before committing.
 
-        Returns list of {name, description} dicts, sorted by relevance.
+        Returns list of {name, description, params} dicts, sorted by relevance.
+        The params field contains a compact signature so the model can call
+        the tool directly without a separate get_tool_schema call.
         """
         query_lower = query.lower()
         # Split query into words for partial matching
@@ -256,10 +283,14 @@ class ToolIndex:
 
             if score > 0:
                 full_desc = self._full_descriptions.get(name, "")
-                results.append((score, name, full_desc))
+                params = self._param_signatures.get(name, "")
+                results.append((score, name, full_desc, params))
 
         results.sort(key=lambda x: (-x[0], x[1]))
-        return [{"name": r[1], "description": r[2]} for r in results[:limit]]
+        return [
+            {"name": r[1], "description": r[2], "params": r[3]}
+            for r in results[:limit]
+        ]
 
     def list_service(self, service: str) -> List[Dict[str, str]]:
         """List all tools for a service prefix.
@@ -279,7 +310,11 @@ class ToolIndex:
             return []
 
         return [
-            {"name": n, "description": self._descriptions.get(n, "")}
+            {
+                "name": n,
+                "description": self._descriptions.get(n, ""),
+                "params": self._param_signatures.get(n, ""),
+            }
             for n in sorted(tool_names)
         ]
 
@@ -297,8 +332,9 @@ class ToolIndex:
         """
         lines = [
             f"{self.tool_count} tools across {len(self._services)} services. "
-            f"Use search_tools(query) to find tools or get_tool_schema(name) "
-            f"to see full parameters before calling a tool.\n"
+            f"Use search_tools(query) to find tools — results include parameter "
+            f"signatures so you can call tools directly. Use get_tool_schema(name) "
+            f"only if you need detailed parameter descriptions.\n"
         ]
 
         for service in sorted(
