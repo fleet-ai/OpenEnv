@@ -175,11 +175,33 @@ def _extract_full_description(tool: Dict[str, Any]) -> str:
     return desc
 
 
+_ENUM_INLINE_MAX_VALUES = 6
+_ENUM_INLINE_MAX_CHARS = 80
+
+
+def _format_enum(values: List[Any]) -> Optional[str]:
+    """Render an enum list as 'a'|'b'|'c' if small enough to inline, else None.
+
+    Prevents pathological cases like 50-value enums from blowing up the summary.
+    """
+    if not values or len(values) > _ENUM_INLINE_MAX_VALUES:
+        return None
+    rendered = "|".join(
+        f"'{v}'" if isinstance(v, str) else str(v) for v in values
+    )
+    if len(rendered) > _ENUM_INLINE_MAX_CHARS:
+        return None
+    return rendered
+
+
 def _extract_param_signature(tool: Dict[str, Any]) -> str:
     """Extract a compact parameter signature from a tool schema.
 
-    Returns a string like "folder: string, limit: integer, skip: integer"
+    Returns a string like "folder?: 'inbox'|'sent'|'drafts', limit?: integer"
     so the model can call the tool directly without fetching the full schema.
+    Small enums are inlined because the 9B otherwise hallucinates values
+    (e.g. calling search with type='post' when the allowed set is 'link' |
+    'comment' | 'sr' | 'user') and burns turns on correction.
     """
     func = tool.get("function", tool)
     params = func.get("parameters", {})
@@ -191,9 +213,13 @@ def _extract_param_signature(tool: Dict[str, Any]) -> str:
 
     parts = []
     for name, spec in props.items():
-        ptype = spec.get("type", "any")
         suffix = "" if name in required else "?"
-        parts.append(f"{name}{suffix}: {ptype}")
+        enum_repr = _format_enum(spec.get("enum") or [])
+        if enum_repr:
+            parts.append(f"{name}{suffix}: {enum_repr}")
+        else:
+            ptype = spec.get("type", "any")
+            parts.append(f"{name}{suffix}: {ptype}")
     return ", ".join(parts)
 
 
