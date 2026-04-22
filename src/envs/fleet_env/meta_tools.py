@@ -106,27 +106,41 @@ META_TOOL_NAMES = {t["function"]["name"] for t in META_TOOLS}
 # --------------------------------------------------------------------------- #
 
 
+_VERB_PREFIXES = {
+    "get", "set", "list", "create", "update", "delete", "search",
+    "add", "remove", "send", "view", "move", "copy", "find", "check",
+    "cancel", "accept", "decline", "forward", "reply", "archive",
+    "mark", "load", "export", "import", "submit", "close", "open",
+    "flag", "save", "unsave", "follow", "unfollow", "subscribe",
+    "unsubscribe", "edit", "vote", "post", "fetch", "read", "write",
+    "insert", "upsert", "draft", "download", "upload", "start", "stop",
+    "pause", "resume", "reset", "configure",
+}
+
+
 def _extract_service_prefix(tool_name: str) -> str:
     """Extract the service prefix from a tool name.
 
-    Convention: service_toolname or service-toolname.
-    E.g. 'ramp_execute_query' -> 'ramp', 'hubspot_relay-create-company' -> 'hubspot'.
+    Handles two naming conventions:
+    1. Real service prefix: 'ramp_execute_query' -> 'ramp',
+       'hubspot_relay-create-company' -> 'hubspot'.
+    2. Verb_domain convention: 'list_emails' -> 'emails',
+       'get_email_attachment' -> 'email', 'create_calendar_event' -> 'calendar'.
 
-    For single-service envs where tools have no prefix (e.g. 'addIssueComment',
-    'getVaultSpaces'), returns None to signal no meaningful grouping.
+    For single-service envs where tools have no separator, returns None.
     """
-    # Try underscore first (most common: ramp_execute_query, outlook_send_email)
-    if "_" in tool_name:
-        prefix = tool_name.split("_")[0]
-        # Reject verb-like prefixes that aren't real service names
-        # (e.g., 'list_emails' -> 'list', 'get_post_content' -> 'get')
-        verbs = {"get", "set", "list", "create", "update", "delete", "search",
-                 "add", "remove", "send", "view", "move", "copy", "find", "check",
-                 "cancel", "accept", "decline", "forward", "reply", "archive",
-                 "mark", "load", "export", "import", "submit", "close", "open"}
-        if prefix.lower() not in verbs:
-            return prefix
-    return None
+    # Split on underscore or hyphen
+    parts = re.split(r"[_\-]", tool_name)
+    if len(parts) < 2:
+        return None
+
+    first = parts[0].lower()
+    if first not in _VERB_PREFIXES:
+        # First token is a real service prefix (e.g., 'ramp', 'hubspot')
+        return parts[0]
+
+    # First token is a verb; use second token as domain (e.g. list_emails -> emails).
+    return parts[1].lower()
 
 
 def _extract_description(tool: Dict[str, Any]) -> str:
@@ -244,7 +258,7 @@ class ToolIndex:
         """Get the full schema for a tool by exact name."""
         return self._tools_by_name.get(name)
 
-    def search(self, query: str, limit: int = 15) -> List[Dict[str, str]]:
+    def search(self, query: str, limit: int = 25) -> List[Dict[str, str]]:
         """Search tools by keyword in name and description.
 
         Matches the full query as a substring, and also matches individual
@@ -318,43 +332,72 @@ class ToolIndex:
             for n in sorted(tool_names)
         ]
 
-    def build_summary(self, tools_per_service: int = 5) -> str:
-        """Build a compact summary of all tools for the system prompt.
+    # Above this, switch from flat mode (all tools with desc + params)
+    # to compact mode (name + params only) to keep the summary under ~12K chars.
+    _FLAT_COMPACT_THRESHOLD = 120
 
-        Groups tools by service, shows top N per service with descriptions,
-        and indicates how many more are available.
+    def build_summary(self) -> str:
+        """Build a summary of all tools for the system prompt.
 
-        Args:
-            tools_per_service: Number of tools to show per service in the summary.
+        Strategy: list every tool so the agent never has to burn a turn searching
+        just to discover it exists. Each tool shown with inline parameter
+        signature so the agent can call it directly.
 
-        Returns:
-            Compact summary string (~500-800 tokens for 192 tools).
+        - <=120 tools: flat list, one line per tool (name — desc (params))
+        - >120 tools: grouped by service, name + params only (drop desc)
+
+        Both modes keep the summary under ~12K chars for the largest envs,
+        vs ~80K for full JSON schema dumps. search_tools and get_tool_schema
+        remain available for keyword lookup and detailed parameter descriptions.
         """
+        if self.tool_count <= self._FLAT_COMPACT_THRESHOLD:
+            return self._build_flat_summary()
+        return self._build_grouped_summary()
+
+    def _build_flat_summary(self) -> str:
         lines = [
-            f"{self.tool_count} tools across {len(self._services)} services. "
-            f"Use search_tools(query) to find tools — results include parameter "
-            f"signatures so you can call tools directly. Use get_tool_schema(name) "
-            f"only if you need detailed parameter descriptions.\n"
+            f"{self.tool_count} tools available. Call any tool directly using "
+            f"the parameter signature shown. Use get_tool_schema(name) only if a "
+            f"call fails due to an unclear parameter.\n"
         ]
 
+        # Sort by service then name so related tools cluster visually.
+        # Single-service envs fall through to one block under "tools".
+        service_keys = sorted(
+            self._services.keys(),
+            key=lambda s: (-len(self._services[s]), s),
+        )
+        for service in service_keys:
+            tool_names = sorted(self._services[service])
+            if len(service_keys) > 1:
+                lines.append(f"### {service} ({len(tool_names)})")
+            for name in tool_names:
+                desc = self._descriptions.get(name, "")
+                params = self._param_signatures.get(name, "")
+                if params:
+                    lines.append(f"- {name}({params}) — {desc}" if desc else f"- {name}({params})")
+                else:
+                    lines.append(f"- {name}() — {desc}" if desc else f"- {name}()")
+            lines.append("")
+        return "\n".join(lines)
+
+    def _build_grouped_summary(self) -> str:
+        lines = [
+            f"{self.tool_count} tools across {len(self._services)} services. "
+            f"Each tool below shows its parameter signature — call directly. "
+            f"Use search_tools(query) for keyword lookup, get_tool_schema(name) "
+            f"for detailed parameter descriptions.\n"
+        ]
         for service in sorted(
             self._services.keys(),
-            key=lambda s: -len(self._services[s]),
+            key=lambda s: (-len(self._services[s]), s),
         ):
             tool_names = sorted(self._services[service])
-            count = len(tool_names)
-
-            # Show the first N tools with descriptions
-            shown = tool_names[:tools_per_service]
-            lines.append(f"### {service} ({count} tools)")
-            for name in shown:
-                desc = self._descriptions.get(name, "")
-                lines.append(f"  {name} — {desc}")
-            remaining = count - len(shown)
-            if remaining > 0:
-                lines.append(f"  ... {remaining} more (use list_service_tools)")
+            lines.append(f"### {service} ({len(tool_names)})")
+            for name in tool_names:
+                params = self._param_signatures.get(name, "")
+                lines.append(f"- {name}({params})" if params else f"- {name}()")
             lines.append("")
-
         return "\n".join(lines)
 
 
