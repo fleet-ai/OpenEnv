@@ -27,7 +27,10 @@ Usage in SkyRL-Fleet env.py:
 import json
 import re
 from collections import defaultdict
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
+
+if TYPE_CHECKING:
+    from .meta_tools_summary import SummaryRecord
 
 
 # --------------------------------------------------------------------------- #
@@ -40,15 +43,18 @@ META_TOOLS = [
         "function": {
             "name": "search_tools",
             "description": (
-                "Search available tools by keyword. Returns matching tool names "
-                "and descriptions. Use this to find tools relevant to your task."
+                "Fallback only. Every tool's name, parameter signature, purpose, "
+                "and return shape is already in the system-prompt summary, so "
+                "call tools directly. Use this only when the summary line for "
+                "a tool is ambiguous or you are looking for an alternate by "
+                "keyword. Returns the matching tools' full summary records."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "Keyword to search for in tool names and descriptions",
+                        "description": "Keyword to match against tool names, use descriptions, and return shapes",
                     }
                 },
                 "required": ["query"],
@@ -60,9 +66,11 @@ META_TOOLS = [
         "function": {
             "name": "get_tool_schema",
             "description": (
-                "Get the full parameter schema for a specific tool. "
-                "Only needed when parameter signatures from search_tools "
-                "are not sufficient — most tools can be called directly."
+                "Fallback only. Returns the full JSON schema for one tool: "
+                "nested object sub-properties, regex patterns, enum values "
+                "that were dropped from the inline summary, and full per-"
+                "parameter descriptions. Use only when the inline summary's "
+                "parameter signature is not enough to compose a correct call."
             ),
             "parameters": {
                 "type": "object",
@@ -81,8 +89,10 @@ META_TOOLS = [
         "function": {
             "name": "list_service_tools",
             "description": (
-                "List all tools for a specific service (e.g., 'ramp', 'outlook', 'hubspot'). "
-                "Returns tool names and one-line descriptions."
+                "Fallback only. Returns compact cards for every tool in a "
+                "service bucket (e.g. 'emails', 'calendar', 'ramp'). Use only "
+                "when narrowing from a general task area and you want to see "
+                "all tools in one service without scanning the full summary."
             ),
             "parameters": {
                 "type": "object",
@@ -230,11 +240,20 @@ class ToolIndex:
     by name and keyword search, and generates compact summaries.
     """
 
-    def __init__(self, tools: List[Dict[str, Any]]):
+    def __init__(
+        self,
+        tools: List[Dict[str, Any]],
+        summary_records: Optional[Dict[str, "SummaryRecord"]] = None,
+    ):
         """Build index from raw tool definitions.
 
         Args:
-            tools: List of tool dicts in OpenAI function-calling format.
+            tools: Tool dicts in OpenAI function-calling format.
+            summary_records: Optional LLM-generated records keyed by tool name.
+                When present, the matching tool renders with the richer
+                three-line form in the system prompt and search returns the
+                full record. Tools without a record fall back to the parser
+                line. See :mod:`meta_tools_summary`.
         """
         self._tools_by_name: Dict[str, Dict[str, Any]] = {}
         self._services: Dict[str, List[str]] = defaultdict(list)
@@ -242,6 +261,7 @@ class ToolIndex:
         self._full_descriptions: Dict[str, str] = {}  # full text for search results
         self._param_signatures: Dict[str, str] = {}  # compact param signatures
         self._ungrouped: List[str] = []
+        self._summary_records: Dict[str, "SummaryRecord"] = dict(summary_records or {})
 
         for tool in tools:
             func = tool.get("function", tool)
@@ -285,59 +305,59 @@ class ToolIndex:
         return self._tools_by_name.get(name)
 
     def search(self, query: str, limit: int = 25) -> List[Dict[str, str]]:
-        """Search tools by keyword in name and description.
+        """Search tools by keyword and return summary records.
 
-        Matches the full query as a substring, and also matches individual
-        words from the query for partial/fuzzy matching. Searches against
-        full descriptions for better recall, returns full descriptions
-        so the model can distinguish similar tools before committing.
-
-        Returns list of {name, description, params} dicts, sorted by relevance.
-        The params field contains a compact signature so the model can call
-        the tool directly without a separate get_tool_schema call.
+        When LLM summary records are available for a tool, the search matches
+        against name + use + returns fields and the returned entry includes
+        those fields so the caller can act without a follow-up schema fetch.
+        Tools without a summary record fall back to matching name + full
+        description and return name/description/params.
         """
         query_lower = query.lower()
-        # Split query into words for partial matching
         query_words = [w for w in re.split(r"[\s_\-]+", query_lower) if len(w) >= 2]
-        results = []
+        scored: List[tuple] = []
 
         for name in self._tools_by_name:
-            name_lower = name.lower()
-            full_desc_lower = self._full_descriptions.get(name, "").lower()
+            rec = self._summary_records.get(name)
+            if rec is not None:
+                haystacks = [name.lower(), rec.use.lower(), rec.returns.lower()]
+            else:
+                haystacks = [name.lower(), self._full_descriptions.get(name, "").lower()]
             score = 0
-
-            # Exact substring match (strongest signal)
-            if query_lower in name_lower:
-                score += 4
-            if query_lower in full_desc_lower:
-                score += 2
-
-            # Per-word matching (weaker but catches partial names)
+            for hay in haystacks:
+                if query_lower and query_lower in hay:
+                    score += 4 if hay is haystacks[0] else 2
             if score == 0 and query_words:
-                word_hits = sum(
-                    1 for w in query_words
-                    if w in name_lower or w in full_desc_lower
-                )
-                if word_hits > 0:
-                    score = word_hits
-
+                score = sum(1 for w in query_words if any(w in h for h in haystacks))
             if score > 0:
-                full_desc = self._full_descriptions.get(name, "")
-                params = self._param_signatures.get(name, "")
-                results.append((score, name, full_desc, params))
+                scored.append((score, name))
 
-        results.sort(key=lambda x: (-x[0], x[1]))
-        return [
-            {"name": r[1], "description": r[2], "params": r[3]}
-            for r in results[:limit]
-        ]
+        scored.sort(key=lambda x: (-x[0], x[1]))
+        out: List[Dict[str, str]] = []
+        for _, name in scored[:limit]:
+            rec = self._summary_records.get(name)
+            if rec is not None:
+                out.append({
+                    "name": name,
+                    "params_signature": rec.params_signature,
+                    "use": rec.use,
+                    "returns": rec.returns,
+                })
+            else:
+                out.append({
+                    "name": name,
+                    "description": self._full_descriptions.get(name, ""),
+                    "params": self._param_signatures.get(name, ""),
+                })
+        return out
 
     def list_service(self, service: str) -> List[Dict[str, str]]:
-        """List all tools for a service prefix.
+        """List all tools in a service bucket as compact cards.
 
-        Returns list of {name, description} dicts.
+        When a tool has an LLM summary record, its card includes
+        ``{name, params_signature, use}``. Otherwise it falls back to
+        ``{name, description, params}`` from the parser.
         """
-        # Try exact match first, then case-insensitive
         tool_names = self._services.get(service)
         if not tool_names:
             service_lower = service.lower()
@@ -345,86 +365,75 @@ class ToolIndex:
                 if svc.lower() == service_lower:
                     tool_names = names
                     break
-
         if not tool_names:
             return []
 
-        return [
-            {
-                "name": n,
-                "description": self._descriptions.get(n, ""),
-                "params": self._param_signatures.get(n, ""),
-            }
-            for n in sorted(tool_names)
-        ]
-
-    # Above this, switch from flat mode (all tools with desc + params)
-    # to compact mode (name + params only) to keep the summary under ~12K chars.
-    _FLAT_COMPACT_THRESHOLD = 120
+        cards: List[Dict[str, str]] = []
+        for n in sorted(tool_names):
+            rec = self._summary_records.get(n)
+            if rec is not None:
+                cards.append({
+                    "name": n,
+                    "params_signature": rec.params_signature,
+                    "use": rec.use,
+                })
+            else:
+                cards.append({
+                    "name": n,
+                    "description": self._descriptions.get(n, ""),
+                    "params": self._param_signatures.get(n, ""),
+                })
+        return cards
 
     def build_summary(self) -> str:
-        """Build a summary of all tools for the system prompt.
+        """Build the per-tool summary inserted into the system prompt.
 
-        Strategy: list every tool so the agent never has to burn a turn searching
-        just to discover it exists. Each tool shown with inline parameter
-        signature so the agent can call it directly.
-
-        - <=120 tools: flat list, one line per tool (name — desc (params))
-        - >120 tools: grouped by service, name + params only (drop desc)
-
-        Both modes keep the summary under ~12K chars for the largest envs,
-        vs ~80K for full JSON schema dumps. search_tools and get_tool_schema
-        remain available for keyword lookup and detailed parameter descriptions.
+        Every tool is rendered. Tools with an LLM summary record render as
+        three lines (``name(params)`` / ``use:`` / ``out:``). Tools without
+        a record fall back to the parser's single-line form. Services are
+        listed as level-3 headers when the env has more than one service.
         """
-        if self.tool_count <= self._FLAT_COMPACT_THRESHOLD:
-            return self._build_flat_summary()
-        return self._build_grouped_summary()
-
-    def _build_flat_summary(self) -> str:
-        lines = [
+        llm_count = len(self._summary_records)
+        head_note = (
             f"{self.tool_count} tools available. Call any tool directly using "
-            f"the parameter signature shown. Use get_tool_schema(name) only if a "
-            f"call fails due to an unclear parameter.\n"
-        ]
+            f"the parameter signature shown."
+        )
+        if llm_count < self.tool_count:
+            head_note += (
+                f" ({llm_count} shown with extended summary, "
+                f"{self.tool_count - llm_count} with parser fallback.)"
+            )
+        lines = [head_note + "\n"]
 
-        # Sort by service then name so related tools cluster visually.
-        # Single-service envs fall through to one block under "tools".
         service_keys = sorted(
             self._services.keys(),
             key=lambda s: (-len(self._services[s]), s),
         )
+        show_service_headers = len(service_keys) > 1
         for service in service_keys:
             tool_names = sorted(self._services[service])
-            if len(service_keys) > 1:
+            if show_service_headers:
                 lines.append(f"### {service} ({len(tool_names)})")
             for name in tool_names:
-                desc = self._descriptions.get(name, "")
-                params = self._param_signatures.get(name, "")
-                if params:
-                    lines.append(f"- {name}({params}) — {desc}" if desc else f"- {name}({params})")
-                else:
-                    lines.append(f"- {name}() — {desc}" if desc else f"- {name}()")
+                lines.append(self._render_tool(name))
             lines.append("")
         return "\n".join(lines)
 
-    def _build_grouped_summary(self) -> str:
-        lines = [
-            f"{self.tool_count} tools across {len(self._services)} services. "
-            f"Each tool below shows its parameter signature — call directly. "
-            f"Use search_tools(query) for keyword lookup, get_tool_schema(name) "
-            f"for detailed parameter descriptions.\n"
-        ]
-        for service in sorted(
-            self._services.keys(),
-            key=lambda s: (-len(self._services[s]), s),
-        ):
-            tool_names = sorted(self._services[service])
-            lines.append(f"### {service} ({len(tool_names)})")
-            for name in tool_names:
-                params = self._param_signatures.get(name, "")
-                lines.append(f"- {name}({params})" if params else f"- {name}()")
-            lines.append("")
-        return "\n".join(lines)
+    def _render_tool(self, name: str) -> str:
+        """Render one tool as it appears in ``build_summary``'s body."""
+        rec = self._summary_records.get(name)
+        if rec is not None:
+            from .meta_tools_summary import render_summary_line
+            return render_summary_line(rec)
+        desc = self._descriptions.get(name, "")
+        params = self._param_signatures.get(name, "")
+        if params and desc:
+            return f"- {name}({params}) — {desc}"
+        if params:
+            return f"- {name}({params})"
+        if desc:
+            return f"- {name}() — {desc}"
+        return f"- {name}()"
 
 
 # --------------------------------------------------------------------------- #

@@ -1,0 +1,238 @@
+{
+  "version": 1,
+  "env_key": "reddit",
+  "env_version": "v0.0.98",
+  "tools": {
+    "get_frontpage_posts": {
+      "name": "get_frontpage_posts",
+      "params_signature": "sort?: 'hot'|'best'|'new'|'rising'|'top'|'controversial', t?: 'hour'|'day'|'week'|'month'|'year'|'all', limit?: integer, after?: string, before?: string, count?: integer, show?: string",
+      "use": "Fetch frontpage posts with optional sort order; use 't' only with 'top'/'controversial', and 'after'/'before' take fullnames like 't3_abc123'.",
+      "returns": "Reddit Listing with children (posts), after, and before cursors; up to 25 items by default, max 100.",
+      "schema_sha": "52bfa6a6340326de"
+    },
+    "get_post_content": {
+      "name": "get_post_content",
+      "params_signature": "article: string, subreddit?: string, comment?: string, context?: integer, depth?: integer, limit?: integer, sort?: string, showedits?: boolean, showmedia?: boolean, showmore?: boolean, showtitle?: boolean, sr_detail?: boolean",
+      "use": "Fetch a post and its comment tree by ID36 (no t3_ prefix); optionally focus on a specific comment ID36 with parent context, and sort defaults to 'confidence'.",
+      "returns": "Post details and a nested comment tree per the requested sort, depth, and limit.",
+      "schema_sha": "e7dbee6fc09e6875"
+    },
+    "get_subreddit_info": {
+      "name": "get_subreddit_info",
+      "params_signature": "subreddit: string",
+      "use": "Fetch metadata for a subreddit, including subscriber count, description, and rules; pass the name without the 'r/' prefix.",
+      "returns": "Subreddit info object with fields like subscribers, description, and rules.",
+      "schema_sha": "5e65d00298eee064"
+    },
+    "get_subreddit_posts": {
+      "name": "get_subreddit_posts",
+      "params_signature": "subreddit: string, sort?: 'hot'|'best'|'new'|'rising'|'top'|'controversial', t?: 'hour'|'day'|'week'|'month'|'year'|'all', limit?: integer, after?: string, before?: string, count?: integer, show?: string",
+      "use": "Fetch posts from a subreddit (omit r/ prefix); default sort is 'hot', default limit 25 (max 100); use 't' only with top/controversial; after/before take t3_ fullnames.",
+      "returns": "Reddit Listing object with children (posts), after, before cursors for pagination.",
+      "schema_sha": "2d679e1c4d6449c1"
+    },
+    "list_subreddits": {
+      "name": "list_subreddits",
+      "params_signature": "where?: 'popular'|'new'|'default', limit?: integer, after?: string, before?: string, count?: integer",
+      "use": "List subreddits by category; use after/before fullnames (e.g. t5_) for pagination; limit defaults to 25, max 100.",
+      "returns": "Reddit Listing with children (subreddit objects), after, and before cursors.",
+      "schema_sha": "f8b5a422d855cb73"
+    },
+    "search_subreddits": {
+      "name": "search_subreddits",
+      "params_signature": "query: string, exact?: boolean, include_over_18?: boolean, include_unadvertisable?: boolean",
+      "use": "Search subreddits whose names begin with the query string (query max 50 chars).",
+      "returns": "List of matching subreddits with names and metadata; see tool response.",
+      "schema_sha": "7c3fd6b541e99448"
+    },
+    "create_subreddit": {
+      "name": "create_subreddit",
+      "params_signature": "name: string, title?: string, description: string, public_description?: string, subreddit_type?: 'public'|'restricted'|'private', over_18?: boolean",
+      "use": "Create a new subreddit community; name must be 3-21 chars of alphanumerics/underscores and descriptions are capped at 500 chars.",
+      "returns": "Created subreddit details including name, title, and type.",
+      "schema_sha": "7dddb41195a2c403"
+    },
+    "subscribe": {
+      "name": "subscribe",
+      "params_signature": "action: 'sub'|'unsub', sr?: string, sr_name?: string, skip_initial_defaults?: boolean",
+      "use": "Subscribe to or unsubscribe from a subreddit; provide either sr (t5_-prefixed fullname) or sr_name (bare name without r/).",
+      "returns": "success/error status",
+      "schema_sha": "ed8253c1976db1d3"
+    },
+    "get_subreddit_rules": {
+      "name": "get_subreddit_rules",
+      "params_signature": "subreddit: string",
+      "use": "Fetch the community rules and posting guidelines for a subreddit; provide the name without the 'r/' prefix.",
+      "returns": "List of rules with fields like short_name, description, and priority.",
+      "schema_sha": "7c63dce11c160dd5"
+    },
+    "subreddits_mine": {
+      "name": "subreddits_mine",
+      "params_signature": "limit?: integer, after?: string, before?: string, count?: integer",
+      "use": "List subreddits the authenticated user is subscribed to; use after/before fullnames for pagination, default limit 25 (max 100).",
+      "returns": "Reddit Listing with children array of subreddit objects plus after/before cursors.",
+      "schema_sha": "4a24f4d33f6a1521"
+    },
+    "get_subreddit_moderators": {
+      "name": "get_subreddit_moderators",
+      "params_signature": "subreddit: string",
+      "use": "List the moderators of a subreddit; provide the name without the 'r/' prefix.",
+      "returns": "UserList with moderator entries (name, id, permissions, date added).",
+      "schema_sha": "d9e3f8a170f23f80"
+    },
+    "submit": {
+      "name": "submit",
+      "params_signature": "sr: string, title: string, kind: 'self'|'link'|'image'|'video'|'videogif', text: string, url?: string, flair_id?: string, flair_text?: string, nsfw?: boolean, spoiler?: boolean, resubmit?: boolean, sendreplies?: boolean",
+      "use": "Submit a new post to a subreddit; sr omits the r/ prefix, title max 300 chars, text is markdown for self posts, url required for link posts.",
+      "returns": "Submission result with post id/url; see tool response",
+      "schema_sha": "b4f5d1e789b80ad6"
+    },
+    "comment": {
+      "name": "comment",
+      "params_signature": "thing_id: string, text: string, return_rtjson?: boolean, richtext_json?: string",
+      "use": "Submit a comment on a post or reply to another comment; thing_id uses t3_ prefix for posts and t1_ for comment replies, text is markdown (max 10000 chars).",
+      "returns": "see tool response",
+      "schema_sha": "9024d47d0deaef83"
+    },
+    "vote": {
+      "name": "vote",
+      "params_signature": "id: string, dir: integer, rank?: integer",
+      "use": "Cast a vote on a post or comment using its fullname ('t3_' for posts, 't1_' for comments); dir is 1=up, 0=unvote, -1=down.",
+      "returns": "success/error status",
+      "schema_sha": "9f12c4f0f238a17d"
+    },
+    "del": {
+      "name": "del",
+      "params_signature": "id: string",
+      "use": "Delete a post or comment you created, identified by fullname ('t3_' prefix for posts, 't1_' for comments).",
+      "returns": "success/error status",
+      "schema_sha": "34b9cc9b268ece74"
+    },
+    "editusertext": {
+      "name": "editusertext",
+      "params_signature": "thing_id: string, text: string, return_rtjson?: boolean",
+      "use": "Edit the markdown body of your own self-post or comment; thing_id must be a fullname ('t3_' for posts, 't1_' for comments).",
+      "returns": "Updated thing object, or rich text JSON if return_rtjson is true",
+      "schema_sha": "319558e0991450c7"
+    },
+    "save": {
+      "name": "save",
+      "params_signature": "id: string, category?: string",
+      "use": "Save a post or comment by fullname ('t3_' prefix for posts, 't1_' for comments); the category parameter requires Reddit Gold.",
+      "returns": "success/error status",
+      "schema_sha": "9d58feed093c978a"
+    },
+    "unsave": {
+      "name": "unsave",
+      "params_signature": "id: string",
+      "use": "Unsave a previously saved post or comment; id must be a fullname ('t3_' prefix for posts, 't1_' for comments).",
+      "returns": "success/error status",
+      "schema_sha": "d1ca94484f44a021"
+    },
+    "hide": {
+      "name": "hide",
+      "params_signature": "id: string",
+      "use": "Hide one or more posts from your frontpage using a comma-separated list of post fullnames prefixed with 't3_'.",
+      "returns": "success/error status",
+      "schema_sha": "0ff34a674622ce3c"
+    },
+    "unhide": {
+      "name": "unhide",
+      "params_signature": "id: string",
+      "use": "Unhide one or more posts, given a comma-separated list of post fullnames prefixed with 't3_'.",
+      "returns": "success/error status",
+      "schema_sha": "c9e81cd0012ed147"
+    },
+    "info": {
+      "name": "info",
+      "params_signature": "id?: string, url?: string, sr_name?: string",
+      "use": "Look up posts or comments by fullname (t3_ for posts, t1_ for comments), URL, or subreddit name list.",
+      "returns": "Listing of Thing objects matching the requested ids, url, or subreddit names.",
+      "schema_sha": "1a12e8625f54f067"
+    },
+    "follow_post": {
+      "name": "follow_post",
+      "params_signature": "fullname: string, follow: boolean",
+      "use": "Follow or unfollow a post to receive new-comment notifications; fullname must be the post's t3_ prefixed id.",
+      "returns": "success/error status",
+      "schema_sha": "fa72556b78bceeb3"
+    },
+    "morechildren": {
+      "name": "morechildren",
+      "params_signature": "link_id: string, children: string, sort?: string, depth?: integer, limit_children?: boolean, id?: string",
+      "use": "Load additional comments from a 'more comments' expansion; link_id uses t3_ prefix and children is a comma-delimited list of comment ID36s.",
+      "returns": "Object with list of comment things expanding the requested subtree.",
+      "schema_sha": "dd4ed7d6f706ae43"
+    },
+    "get_user": {
+      "name": "get_user",
+      "params_signature": "username: string, where?: 'about'|'overview'|'submitted'|'comments'|'saved'|'hidden'|'upvoted'|'downvoted', sort?: 'hot'|'new'|'top'|'controversial', t?: 'hour'|'day'|'week'|'month'|'year'|'all', type?: 'links'|'comments', limit?: integer, after?: string, before?: string, count?: integer, context?: integer, sr_detail?: boolean",
+      "use": "Fetch a Reddit user's profile ('about') or activity listing; after/before take fullname IDs and limit defaults to 25 (max 100).",
+      "returns": "User object for 'about', otherwise a Listing with children, after, and before fields.",
+      "schema_sha": "560a500dbeed400a"
+    },
+    "search_users": {
+      "name": "search_users",
+      "params_signature": "q: string, sort?: 'relevance'|'activity', limit?: integer, after?: string, before?: string, count?: integer",
+      "use": "Search for users by username; after/before take a thing fullname (e.g. 't2_') for pagination and limit defaults to 25 (max 100).",
+      "returns": "Listing of user objects with fields like children, after, before.",
+      "schema_sha": "27b9c3268b254996"
+    },
+    "me": {
+      "name": "me",
+      "params_signature": "()",
+      "use": "Get information about the currently authenticated user.",
+      "returns": "User object with fields like id, name, and account details.",
+      "schema_sha": "1a2901a89df7f844"
+    },
+    "me_karma": {
+      "name": "me_karma",
+      "params_signature": "()",
+      "use": "Get the current user's karma breakdown by subreddit.",
+      "returns": "see tool response",
+      "schema_sha": "526f71f75098ad72"
+    },
+    "search": {
+      "name": "search",
+      "params_signature": "q: string, subreddit?: string, restrict_sr?: boolean, sort?: 'relevance'|'hot'|'top'|'new'|'comments', t?: 'hour'|'day'|'week'|'month'|'year'|'all', type?: 'link'|'comment'|'sr'|'user', limit?: integer, after?: string, before?: string, count?: integer, include_facets?: boolean, sr_detail?: boolean",
+      "use": "Search Reddit for posts, comments, subreddits, or users; use after/before with fullname IDs (t3_, t1_, etc.) for pagination, default limit 25, max 100.",
+      "returns": "Reddit Listing with children array of matching things, plus after/before cursors for pagination.",
+      "schema_sha": "6c492286e9e2b8ba"
+    },
+    "save_post_draft": {
+      "name": "save_post_draft",
+      "params_signature": "subreddit_name: string, title: string, post_type?: 'text'|'self'|'link'|'image'|'video'|'videogif', content?: string, url?: string, is_nsfw?: boolean, is_spoiler?: boolean, flair_text?: string",
+      "use": "Save or update a Reddit post draft for later publishing; omit subreddit prefix (use 'Python', not 'r/Python'), use content for text posts and url for link posts.",
+      "returns": "Draft details including draft id, subreddit, title, and saved fields.",
+      "schema_sha": "f18fa1f7e00e453d"
+    },
+    "get_post_draft": {
+      "name": "get_post_draft",
+      "params_signature": "draft_id: string",
+      "use": "Retrieve details of a specific post draft by its ID.",
+      "returns": "see tool response",
+      "schema_sha": "e44f9bfb1cd0e531"
+    },
+    "list_post_drafts": {
+      "name": "list_post_drafts",
+      "params_signature": "()",
+      "use": "List all post drafts for the current authenticated user.",
+      "returns": "Array of draft objects; see tool response for fields.",
+      "schema_sha": "ef0e49c69dc5b8dc"
+    },
+    "publish_post_draft": {
+      "name": "publish_post_draft",
+      "params_signature": "subreddit_name: string, draft_id: string",
+      "use": "Publish an existing draft as a post in the given subreddit and delete the draft afterwards.",
+      "returns": "success/error status",
+      "schema_sha": "e333fc3a5c0a1741"
+    },
+    "delete_post_draft": {
+      "name": "delete_post_draft",
+      "params_signature": "draft_id: string",
+      "use": "Delete a post draft by its ID.",
+      "returns": "success/error status",
+      "schema_sha": "3b89f77e3cc39ff3"
+    }
+  }
+}

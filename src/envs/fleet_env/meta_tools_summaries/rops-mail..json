@@ -1,0 +1,1001 @@
+{
+  "version": 1,
+  "env_key": "rops-mail",
+  "env_version": "",
+  "tools": {
+    "relay_relay-get-object": {
+      "name": "relay_relay-get-object",
+      "params_signature": "object_type: 'contacts'|'companies'|'deals'|'tickets', object_id: string",
+      "use": "Fetch a single HubSpot CRM record (contact, company, deal, or ticket) by numeric ID; these are external customer records, not team members.",
+      "returns": "see tool response",
+      "schema_sha": "b7180008f29a21c9"
+    },
+    "relay_relay-search-objects": {
+      "name": "relay_relay-search-objects",
+      "params_signature": "object_type: 'contacts'|'companies'|'deals'|'tickets', query?: string, filterGroups?: array, limit?: number",
+      "use": "Search HubSpot CRM records by text query or property filters; filterGroups combine with OR, filters within a group with AND; returns up to 100 results.",
+      "returns": "Matching CRM records with id and properties fields",
+      "schema_sha": "b8b86fa4394eb8ac"
+    },
+    "relay_relay-list-objects": {
+      "name": "relay_relay-list-objects",
+      "params_signature": "object_type: 'contacts'|'companies'|'deals'|'tickets', limit?: number, after?: string",
+      "use": "List HubSpot CRM records of the given type with cursor-based pagination, ordered by ID; returns an optimized default property set.",
+      "returns": "Page of CRM records with ~7-10 properties each and a pagination cursor for fetching subsequent pages.",
+      "schema_sha": "dc080ec2c3fcc9d8"
+    },
+    "relay_relay-list-associations": {
+      "name": "relay_relay-list-associations",
+      "params_signature": "object_type: 'contacts'|'companies'|'deals'|'tickets', object_id: string, to_object_type: 'contacts'|'companies'|'deals'|'tickets'",
+      "use": "List HubSpot CRM associations from a source object to all related objects of a target type; object_id must be a numeric string.",
+      "returns": "Array of associations with target object IDs and association types.",
+      "schema_sha": "049cad9432a905c9"
+    },
+    "relay_relay-create-association": {
+      "name": "relay_relay-create-association",
+      "params_signature": "from_type: 'contacts'|'companies'|'deals'|'tickets', from_id: string, to_type: 'contacts'|'companies'|'deals'|'tickets', to_id: string",
+      "use": "Create an association linking two HubSpot CRM objects (e.g., contact to company); IDs must be numeric strings.",
+      "returns": "success/error status",
+      "schema_sha": "1b8ed66ef8059f2e"
+    },
+    "relay_relay-get-association-definitions": {
+      "name": "relay_relay-get-association-definitions",
+      "params_signature": "from_object_type: 'contacts'|'companies'|'deals'|'tickets', to_object_type: 'contacts'|'companies'|'deals'|'tickets'",
+      "use": "Retrieve HubSpot association type definitions between two object types (e.g., contacts to companies).",
+      "returns": "see tool response",
+      "schema_sha": "b2beab978c465bb1"
+    },
+    "relay_relay-create-engagement": {
+      "name": "relay_relay-create-engagement",
+      "params_signature": "engagement_type: 'NOTE'|'EMAIL'|'TASK'|'MEETING'|'CALL', subject?: string, body?: string, ownerId: number, contactId?: number, companyId?: number, dealId?: number, ticketId?: number",
+      "use": "Create a HubSpot engagement (note, email, task, meeting, or call); supply at least one association ID (contactId, companyId, dealId, or ticketId).",
+      "returns": "Created engagement object with id, type, and association details.",
+      "schema_sha": "8e665b230b5f246b"
+    },
+    "relay_relay-get-engagement": {
+      "name": "relay_relay-get-engagement",
+      "params_signature": "engagement_id: string",
+      "use": "Retrieve full details of a HubSpot engagement by its numeric ID; engagement_id must be a digit string.",
+      "returns": "Engagement object with all properties (id, type, associations, metadata, timestamps).",
+      "schema_sha": "d24e9eb48e41a85d"
+    },
+    "relay_relay-update-engagement": {
+      "name": "relay_relay-update-engagement",
+      "params_signature": "engagement_id: string, subject?: string, body?: string, owner_id?: number, outcome?: string, direction?: string",
+      "use": "Update an existing HubSpot engagement by numeric ID with new subject, body, owner, outcome, or direction values.",
+      "returns": "success/error status",
+      "schema_sha": "ccf2c9faf8f7eee6"
+    },
+    "relay_relay-search-engagements": {
+      "name": "relay_relay-search-engagements",
+      "params_signature": "query?: string, engagement_type?: array<'note'|'email'|'call'|'task'|'meeting'>, start_date?: string, end_date?: string, associated_object_id?: string, object_type?: 'company'|'contact'|'deal'|'ticket', limit?: number, offset?: number",
+      "use": "Search HubSpot engagements (notes, emails, calls, tasks, meetings) by keyword, type, ISO-8601 date range, or associated object; object_type is required when associated_object_id is set; limit defaults to 50 (max 100).",
+      "returns": "Matching engagements with full details and associations; see tool response for exact shape.",
+      "schema_sha": "6e41b80cfef69971"
+    },
+    "relay_relay-search-owners": {
+      "name": "relay_relay-search-owners",
+      "params_signature": "email?: string, search?: string",
+      "use": "Search HubSpot internal users/owners by exact email or partial name/email match to find owner IDs for assigning deals, tasks, or engagements.",
+      "returns": "List of owners with id, email, and display name.",
+      "schema_sha": "1c48dc3d6e5d9b2a"
+    },
+    "relay_hubspot-get-user-details": {
+      "name": "relay_hubspot-get-user-details",
+      "params_signature": "id: string",
+      "use": "Retrieve details of a specific HubSpot user by numeric user ID (digits only).",
+      "returns": "User object with fields like id, email, and role",
+      "schema_sha": "e4e964da72f8b011"
+    },
+    "relay_relay-list-properties": {
+      "name": "relay_relay-list-properties",
+      "params_signature": "object_type: 'contacts'|'companies'|'deals'|'tickets'",
+      "use": "List all available HubSpot properties defined for a given Relay object type.",
+      "returns": "Array of property definitions (name, label, type, etc.)",
+      "schema_sha": "ee355b109a9b5186"
+    },
+    "relay_relay-get-property": {
+      "name": "relay_relay-get-property",
+      "params_signature": "object_type: 'contacts'|'companies'|'deals'|'tickets', property_name: string",
+      "use": "Get HubSpot property details by its internal name (not label) for a given object type.",
+      "returns": "Property details object including name, label, type, and field metadata.",
+      "schema_sha": "1822efd790a3fc16"
+    },
+    "relay_relay-create-property": {
+      "name": "relay_relay-create-property",
+      "params_signature": "object_type: 'contacts'|'companies'|'deals'|'tickets', name: string, label: string, type: 'string'|'number'|'bool'|'datetime'|'date'|'enumeration', description?: string, options?: array",
+      "use": "Create a new custom property on a HubSpot object; name must be lowercase with no spaces, and options is required when type is enumeration.",
+      "returns": "Created property object with fields like name, label, type.",
+      "schema_sha": "a9c35690bffe3968"
+    },
+    "relay_relay-update-property": {
+      "name": "relay_relay-update-property",
+      "params_signature": "object_type: 'contacts'|'companies'|'deals'|'tickets', property_name: string, label?: string, description?: string",
+      "use": "Update the display label or description of an existing custom property on a HubSpot object type via Relay.",
+      "returns": "success/error status",
+      "schema_sha": "44cf1199c2437fbc"
+    },
+    "relay_relay-list-workflows": {
+      "name": "relay_relay-list-workflows",
+      "params_signature": "limit?: number, offset?: number",
+      "use": "List HubSpot workflows via Relay, with optional pagination.",
+      "returns": "see tool response",
+      "schema_sha": "466643fbd832e722"
+    },
+    "relay_relay-get-workflow": {
+      "name": "relay_relay-get-workflow",
+      "params_signature": "workflow_id: string",
+      "use": "Get HubSpot workflow details by ID via Relay; workflow_id must be a numeric string.",
+      "returns": "see tool response",
+      "schema_sha": "5a39299a707d6b42"
+    },
+    "relay_hubspot-get-schemas": {
+      "name": "relay_hubspot-get-schemas",
+      "params_signature": "()",
+      "use": "Retrieve all custom object schemas defined in the HubSpot account; use returned objectTypeId and objectType values in subsequent API calls.",
+      "returns": "List of schemas with objectTypeId, objectType, properties, and associations.",
+      "schema_sha": "17935a763f95b852"
+    },
+    "relay_hubspot-get-link": {
+      "name": "relay_hubspot-get-link",
+      "params_signature": "portalId: string, uiDomain: string, pageRequests: array<{pagetype: 'record'|'index', objectTypeId: string, objectId?: string}>",
+      "use": "Generate HubSpot UI URLs for object index pages or specific records; objectTypeId uses HubSpot codes (0-1 contacts, 0-2 companies, 0-3 deals, 0-5 tickets) and objectId is required for 'record' pages.",
+      "returns": "Array of generated URLs linking to the requested HubSpot UI pages.",
+      "schema_sha": "cd847489dff0448b"
+    },
+    "relay_relay-create-contact": {
+      "name": "relay_relay-create-contact",
+      "params_signature": "firstname?: string, lastname?: string, email?: string, phone?: string, jobtitle?: string, company?: string, lifecyclestage?: string, hs_lead_status?: string, hubspot_owner_id?: string, associatedCompanyId?: string",
+      "use": "Create a new HubSpot contact using flat field inputs; phone takes country code format, owner and company association IDs must be numeric strings.",
+      "returns": "see tool response",
+      "schema_sha": "5f9ef7b2616501cb"
+    },
+    "relay_relay-update-contact": {
+      "name": "relay_relay-update-contact",
+      "params_signature": "id: string, firstname?: string, lastname?: string, email?: string, phone?: string, jobtitle?: string, company?: string, lifecyclestage?: string, hs_lead_status?: string, hubspot_owner_id?: string",
+      "use": "Update an existing HubSpot contact by numeric ID with provided field values; company is a text name not an ID, and phone should include country code.",
+      "returns": "success/error status",
+      "schema_sha": "f779783320d9b699"
+    },
+    "relay_relay-get-contact": {
+      "name": "relay_relay-get-contact",
+      "params_signature": "id: string",
+      "use": "Fetch a HubSpot contact by numeric ID (digits only) and return all of its properties.",
+      "returns": "Contact object with all properties (id, properties, createdAt, updatedAt).",
+      "schema_sha": "6e5fde9c1430adbd"
+    },
+    "relay_relay-create-company": {
+      "name": "relay_relay-create-company",
+      "params_signature": "name: string, domain?: string, industry?: string, phone?: string, city?: string, state?: string, country?: string, website?: string, description?: string, numberofemployees?: string, annualrevenue?: string, type?: 'Prospect'|'Partner'|'Reseller'|'Vendor'|'Other', hubspot_owner_id?: string",
+      "use": "Create a new HubSpot company with flat field inputs; domain excludes http://, numberofemployees and hubspot_owner_id must be numeric strings, industry uses a fixed LinkedIn-style list.",
+      "returns": "Created company object with id and properties.",
+      "schema_sha": "07b83dcfc4bbf751"
+    },
+    "relay_relay-update-company": {
+      "name": "relay_relay-update-company",
+      "params_signature": "id: string, name?: string, domain?: string, industry?: string, phone?: string, city?: string, state?: string, country?: string, website?: string, description?: string, numberofemployees?: string, annualrevenue?: string, type?: 'Prospect'|'Partner'|'Reseller'|'Vendor'|'Other', hubspot_owner_id?: string",
+      "use": "Update an existing HubSpot company by numeric ID; domain omits http://, numberofemployees and hubspot_owner_id must be numeric strings, industry uses a fixed LinkedIn-style list.",
+      "returns": "Updated company record, typically with id and updated properties.",
+      "schema_sha": "ee13d2b692daa740"
+    },
+    "relay_relay-get-company": {
+      "name": "relay_relay-get-company",
+      "params_signature": "id: string",
+      "use": "Retrieve a HubSpot company by its numeric ID (digits only) via Relay, returning all company properties.",
+      "returns": "Company object with all HubSpot properties.",
+      "schema_sha": "af60e86b54d1e2f3"
+    },
+    "relay_relay-create-deal": {
+      "name": "relay_relay-create-deal",
+      "params_signature": "dealname: string, amount?: string, closedate?: string, dealstage: 'appointmentscheduled'|'qualifiedtobuy'|'presentationscheduled'|'decisionmakerboughtin'|'contractsent'|'closedwon'|'closedlost', pipeline: 'default', hubspot_owner_id?: string, description?: string, deal_currency_code?: string, hs_priority?: 'low'|'medium'|'high', dealtype?: 'newbusiness'|'existingbusiness'|'renewal', associatedContactId?: string, associatedCompanyId?: string",
+      "use": "Create a new HubSpot deal with flat field inputs; closedate must be YYYY-MM-DD (or ISO-8601), and ID fields must be numeric strings.",
+      "returns": "see tool response",
+      "schema_sha": "a500c7b7a0db280a"
+    },
+    "relay_relay-update-deal": {
+      "name": "relay_relay-update-deal",
+      "params_signature": "id: string, dealname?: string, amount?: string, closedate?: string, dealstage?: string, pipeline?: 'default', hubspot_owner_id?: string, description?: string, deal_currency_code?: string, hs_priority?: 'low'|'medium'|'high', dealtype?: 'newbusiness'|'existingbusiness'|'renewal'",
+      "use": "Update an existing HubSpot deal by numeric ID; closedate uses YYYY-MM-DD (or ISO-8601), and dealstage must be a HubSpot pipeline stage key.",
+      "returns": "see tool response",
+      "schema_sha": "566a06556b27acf6"
+    },
+    "relay_relay-get-deal": {
+      "name": "relay_relay-get-deal",
+      "params_signature": "id: string",
+      "use": "Retrieve a HubSpot deal by its numeric ID (digits only) via Relay, returning all deal properties.",
+      "returns": "Deal object with all properties (e.g. dealname, amount, dealstage, pipeline).",
+      "schema_sha": "1fc83ca0ce0b6c5b"
+    },
+    "relay_relay-create-ticket": {
+      "name": "relay_relay-create-ticket",
+      "params_signature": "subject: string, content?: string, hs_ticket_priority?: 'LOW'|'MEDIUM'|'HIGH', hs_pipeline_stage?: '1'|'2'|'3'|'4'|'5', hubspot_owner_id?: string, hs_pipeline?: '0', source_type?: string, associatedContactId?: string, associatedCompanyId?: string",
+      "use": "Create a HubSpot support ticket; pipeline_stage maps 1=New, 2=Waiting on contact, 3=Waiting on us, 4=In Progress, 5=Closed, and ID fields must be numeric strings.",
+      "returns": "see tool response",
+      "schema_sha": "78016f4cfe528783"
+    },
+    "relay_relay-update-ticket": {
+      "name": "relay_relay-update-ticket",
+      "params_signature": "id: string, subject?: string, content?: string, hs_ticket_priority?: 'LOW'|'MEDIUM'|'HIGH', hs_pipeline_stage?: '1'|'2'|'3'|'4'|'5', hubspot_owner_id?: string, hs_pipeline?: '0', source_type?: string",
+      "use": "Update an existing HubSpot ticket by numeric ID; pipeline stages map 1=New, 2=Waiting on contact, 3=Waiting on us, 4=In Progress, 5=Closed.",
+      "returns": "success/error status",
+      "schema_sha": "d2b4a3c6bba996f0"
+    },
+    "relay_relay-get-ticket": {
+      "name": "relay_relay-get-ticket",
+      "params_signature": "id: string",
+      "use": "Retrieve a HubSpot ticket by its numeric ID (digits only) and return all of its properties.",
+      "returns": "Ticket object with all properties (e.g. subject, content, status, pipeline).",
+      "schema_sha": "cddec5722b6c6c5f"
+    },
+    "kernel_atlasUserInfo": {
+      "name": "kernel_atlasUserInfo",
+      "params_signature": "()",
+      "use": "Get the current authenticated user's info from Atlas (Kernel Jira integration).",
+      "returns": "see tool response",
+      "schema_sha": "9a83df34c73fc7b8"
+    },
+    "kernel_getAccessibleAtlasResources": {
+      "name": "kernel_getAccessibleAtlasResources",
+      "params_signature": "()",
+      "use": "Retrieve the Atlassian cloudid needed to construct Atlas REST API calls for the Jira kernel.",
+      "returns": "see tool response",
+      "schema_sha": "e10fe3ff785a0a8d"
+    },
+    "kernel_getVaultSpaces": {
+      "name": "kernel_getVaultSpaces",
+      "params_signature": "cloudId: string, cursor?: string, limit?: number=25",
+      "use": "List Vault spaces for a Jira/Atlas Cloud instance; cloudId accepts a UUID or site URL, limit max 250.",
+      "returns": "Paginated list of spaces with cursor for next page.",
+      "schema_sha": "7c8691eea98be676"
+    },
+    "kernel_getVaultPage": {
+      "name": "kernel_getVaultPage",
+      "params_signature": "cloudId: string, pageId: string",
+      "use": "Retrieve a specific Vault page or live doc (including body content) by its ID from an Atlas Cloud instance; cloudId accepts a UUID or site URL.",
+      "returns": "Page object with id, title, body content, and metadata.",
+      "schema_sha": "349cffe3865aa067"
+    },
+    "kernel_getPagesInVaultSpace": {
+      "name": "kernel_getPagesInVaultSpace",
+      "params_signature": "cloudId: string, spaceId: string, limit?: number=100, cursor?: string, status?: 'draft'|'published'|'edited_unpublished'|'archived'|'deleted', title?: string, sort?: string, type?: 'page'|'folder'|'database', parentId?: string, authorId?: string, emoji?: string, slug?: string, version?: number",
+      "use": "List pages in a Vault space with filters; cloudId accepts UUID or site URL, parentId 'null'/empty for root, emoji accepts 'none'/'any'/char, sort defaults to created_at_desc.",
+      "returns": "Paginated list of page objects with items and cursor for next page.",
+      "schema_sha": "27c0690356654fc3"
+    },
+    "kernel_getVaultPageAncestors": {
+      "name": "kernel_getVaultPageAncestors",
+      "params_signature": "cloudId: string, pageId: string, limit?: number",
+      "use": "Retrieve all ancestor (parent) pages of a given Confluence page in hierarchical order; cloudId accepts a UUID or Atlas site URL.",
+      "returns": "List of ancestor page objects with fields like id, title, and parent references.",
+      "schema_sha": "ec571429aa0e73ad"
+    },
+    "kernel_getVaultPageFooterComments": {
+      "name": "kernel_getVaultPageFooterComments",
+      "params_signature": "cloudId: string, pageId: string, limit?: number, cursor?: string, sort?: 'id'|'-id'|'created-date'|'-created-date'",
+      "use": "Retrieve footer comments for a Confluence Vault page; cloudId is a UUID, site URL, or extractable from Atlas URLs, and supports cursor pagination.",
+      "returns": "see tool response",
+      "schema_sha": "6e9c57418361d3f9"
+    },
+    "kernel_getVaultPageDescendants": {
+      "name": "kernel_getVaultPageDescendants",
+      "params_signature": "cloudId: string, pageId: string, limit?: number, depth?: number, cursor?: string",
+      "use": "Retrieve all descendant (child) pages of a Confluence page in the hierarchy; cloudId accepts a UUID or site URL.",
+      "returns": "Paginated list of descendant pages with IDs, titles, and hierarchy info, plus a cursor for next page.",
+      "schema_sha": "864edd505a93c42e"
+    },
+    "kernel_createVaultPage": {
+      "name": "kernel_createVaultPage",
+      "params_signature": "cloudId: string, spaceId: string, title?: string, parentId?: string, body: string",
+      "use": "Create a new Confluence Vault page in the given space; body must be markdown, and cloudId accepts a UUID or site URL.",
+      "returns": "see tool response",
+      "schema_sha": "fb73529baa9d9a90"
+    },
+    "kernel_updateVaultPage": {
+      "name": "kernel_updateVaultPage",
+      "params_signature": "cloudId: string, pageId: string, title?: string, status?: 'current'|'draft', spaceId?: string, parentId?: string, body: string, version: integer, versionMessage?: string",
+      "use": "Update an existing Confluence Vault page or Live Doc; body must be markdown and version must match the page's current version number.",
+      "returns": "Updated page object with id, title, version, and body.",
+      "schema_sha": "1f71c058d798873d"
+    },
+    "kernel_createVaultFooterComment": {
+      "name": "kernel_createVaultFooterComment",
+      "params_signature": "cloudId: string, pageId?: string, parentCommentId?: string, attachmentId?: string, customContentId?: string, body: string",
+      "use": "Create a footer comment (or reply) on a Confluence/Vault page, blog post, attachment, or custom content; body must be Markdown.",
+      "returns": "Created comment object with id, body, and target references.",
+      "schema_sha": "78ebd905ba76399d"
+    },
+    "kernel_searchVaultUsingCql": {
+      "name": "kernel_searchVaultUsingCql",
+      "params_signature": "cloudId: string, cql: string, cqlcontext?: string, cursor?: string, expand?: string, limit?: number, prev?: boolean, next?: boolean",
+      "use": "Search Confluence/Vault content using a CQL query string; cloudId accepts a UUID or site URL, limit defaults to 25 (max 250).",
+      "returns": "Search results with matching content items and pagination links.",
+      "schema_sha": "f977022f4455e36e"
+    },
+    "kernel_getKernelIssue": {
+      "name": "kernel_getKernelIssue",
+      "params_signature": "cloudId: string, issueIdOrKey: string, fields?: array, expand?: string, properties?: array",
+      "use": "Fetch full details of a Kernel (Jira) issue by its ID or key; cloudId is an Atlas instance UUID or site URL.",
+      "returns": "Issue object with fields, key, id, and optional expanded properties.",
+      "schema_sha": "e4f3700c6d02a6ac"
+    },
+    "kernel_editKernelIssue": {
+      "name": "kernel_editKernelIssue",
+      "params_signature": "cloudId: string, issueIdOrKey: string, fields: object",
+      "use": "Update fields of an existing Jira Kernel issue by id or key; cloudId is an Atlas instance UUID or site URL.",
+      "returns": "success/error status",
+      "schema_sha": "b960e52c9470598c"
+    },
+    "kernel_createKernelIssue": {
+      "name": "kernel_createKernelIssue",
+      "params_signature": "cloudId: string, projectKey: string, summary: string, issueTypeName?: string, description?: string, parent?: string, assignee_account_id?: string, additional_fields?: object",
+      "use": "Create a new Kernel (Jira) issue; description uses Markdown, parent takes an issue key/id for Subtasks, and additional_fields handles custom/complex fields.",
+      "returns": "see tool response",
+      "schema_sha": "272028ddd90c6505"
+    },
+    "kernel_getTransitionsForKernelIssue": {
+      "name": "kernel_getTransitionsForKernelIssue",
+      "params_signature": "cloudId: string, issueIdOrKey: string, expand?: string, transitionId?: string",
+      "use": "List available workflow transitions for a Kernel (Jira) issue by id or key on the given Atlas cloud instance.",
+      "returns": "Object with transitions array, each including id, name, and target status.",
+      "schema_sha": "676e641034c11a5a"
+    },
+    "kernel_transitionKernelIssue": {
+      "name": "kernel_transitionKernelIssue",
+      "params_signature": "cloudId: string, issueIdOrKey: string, transition: object, fields?: object, update?: object",
+      "use": "Transition a Jira issue to a new status using a transition id; use getAccessibleAtlasResources if cloudId is unknown.",
+      "returns": "success/error status",
+      "schema_sha": "b0942484844f73db"
+    },
+    "kernel_lookupKernelAccountId": {
+      "name": "kernel_lookupKernelAccountId",
+      "params_signature": "cloudId: string, searchString: string",
+      "use": "Look up Jira user account IDs matching a search string; cloudId is an Atlas Cloud UUID or site URL (use getAccessibleAtlasResources if unknown).",
+      "returns": "see tool response",
+      "schema_sha": "124d3113285fe552"
+    },
+    "kernel_searchKernelIssuesUsingJql": {
+      "name": "kernel_searchKernelIssuesUsingJql",
+      "params_signature": "cloudId: string, jql: string, maxResults?: number, fields?: array, nextPageToken?: string",
+      "use": "Search Jira (Kernel) issues with JQL; statusCategory is unsupported, use status instead; default fields: summary, description, status, issuetype, priority, created.",
+      "returns": "List of issues with their fields and a nextPageToken for pagination (default 50, max 100 per page).",
+      "schema_sha": "b126a547d336b3c6"
+    },
+    "kernel_addCommentToKernelIssue": {
+      "name": "kernel_addCommentToKernelIssue",
+      "params_signature": "cloudId: string, issueIdOrKey: string, body: string, commentVisibility?: object",
+      "use": "Add a comment (Markdown body) to an existing Kernel Jira issue, optionally restricting visibility to a group or role.",
+      "returns": "success/error status",
+      "schema_sha": "432bb413d5ced723"
+    },
+    "kernel_getVisibleKernelProjects": {
+      "name": "kernel_getVisibleKernelProjects",
+      "params_signature": "cloudId: string, searchString?: string, startAt?: number=0, maxResults?: number=50",
+      "use": "List Jira projects visible to the user (view, browse, edit, or create permission); cloudId accepts a UUID or site URL.",
+      "returns": "Paginated list of project objects with fields like id, key, name, and projectTypeKey.",
+      "schema_sha": "f56de8d7e0050d67"
+    },
+    "kernel_getKernelProjectIssueTypesMetadata": {
+      "name": "kernel_getKernelProjectIssueTypesMetadata",
+      "params_signature": "cloudId: string, projectIdOrKey: string, startAt?: number=0, maxResults?: number=50",
+      "use": "Get a page of issue type metadata for a Jira project; cloudId is a UUID, site URL, or extracted from an Atlas URL.",
+      "returns": "Paginated list of issue type metadata objects for the project.",
+      "schema_sha": "9ef3c2d71c4a17eb"
+    },
+    "kernel_getJiraIssueRemoteIssueLinks": {
+      "name": "kernel_getJiraIssueRemoteIssueLinks",
+      "params_signature": "cloudId: string, issueIdOrKey: string, globalId?: string, linkId?: string",
+      "use": "Retrieve remote issue links attached to a Jira issue, optionally filtered by globalId or linkId.",
+      "returns": "Array of remote link objects with id, globalId, application, and object details.",
+      "schema_sha": "c6ce90cddf2633d6"
+    },
+    "kernel_getJiraIssueTypeMetaWithFields": {
+      "name": "kernel_getJiraIssueTypeMetaWithFields",
+      "params_signature": "cloudId: string, projectKeys?: string, issuetypeIds?: string, issuetypeNames?: string, startAt?: number=0, maxResults?: number=50",
+      "use": "Retrieve Jira issue type metadata including field definitions for a Cloud instance, optionally filtered by project, issue type ID, or name; max 200 per page.",
+      "returns": "Paginated list of issue type metadata entries with their fields; see tool response for exact shape.",
+      "schema_sha": "5273241a246241f0"
+    },
+    "latch_fakelook_auth_login": {
+      "name": "latch_fakelook_auth_login",
+      "params_signature": "email: string, password: string",
+      "use": "Authenticate a FakeLook user with email and password, recording a login activity for session tracking.",
+      "returns": "Authenticated user object and auth state.",
+      "schema_sha": "5d91b0ca7e08eda3"
+    },
+    "latch_fakelook_auth_logout": {
+      "name": "latch_fakelook_auth_logout",
+      "params_signature": "()",
+      "use": "Log out the currently authenticated Latch (Outlook) FakeLook user and clear the session state.",
+      "returns": "Updated auth state indicating the user is logged out.",
+      "schema_sha": "0b7e7adaf97803a7"
+    },
+    "latch_list_emails": {
+      "name": "latch_list_emails",
+      "params_signature": "folder?: 'inbox'|'sent'|'drafts'|'deleted'|'junk'|'archive'|'outbox', limit?: integer, offset?: integer",
+      "use": "List recent Outlook emails from the specified folder (default inbox), newest first; limit defaults to 10, max 100.",
+      "returns": "List of email objects with fields like id, subject, sender, receivedDateTime.",
+      "schema_sha": "50308bde5512dd28"
+    },
+    "latch_get_conversation_messages": {
+      "name": "latch_get_conversation_messages",
+      "params_signature": "conversationId: string, limit?: integer, offset?: integer",
+      "use": "Fetch Outlook conversation thread messages oldest-to-newest via Latch; accepts a conversation ID or any message ID in the thread.",
+      "returns": "Paginated list of message objects in the conversation; default limit 10, max 100.",
+      "schema_sha": "0ed31a4b190d4661"
+    },
+    "latch_list_mail_folders": {
+      "name": "latch_list_mail_folders",
+      "params_signature": "()",
+      "use": "List all mail folders in the authenticated user's Outlook mailbox.",
+      "returns": "Array of mail folder objects (id, displayName, etc.); see tool response.",
+      "schema_sha": "cbd5a6b675e00763"
+    },
+    "latch_view_email": {
+      "name": "latch_view_email",
+      "params_signature": "messageId: string, markAsRead?: boolean",
+      "use": "Fetch a single Outlook email by ID, optionally marking it as read; returns only that message, not the full thread.",
+      "returns": "Email object with fields like id, subject, from, body, receivedDateTime.",
+      "schema_sha": "c1fc9f289c2dce77"
+    },
+    "latch_search_emails": {
+      "name": "latch_search_emails",
+      "params_signature": "query?: string, folder?: string, from?: string, to?: string, cc?: string, dateFrom?: string, dateTo?: string, readStatus?: 'all'|'read'|'unread', hasAttachments?: boolean, limit?: number",
+      "use": "Search Outlook emails by text, folder, sender/recipient, date range, read status, or attachments; dates are ISO YYYY-MM-DD and email filters require resolved addresses.",
+      "returns": "List of matching email messages (up to limit, default 50, max 100).",
+      "schema_sha": "a0836b4bc06d79ed"
+    },
+    "latch_send_email": {
+      "name": "latch_send_email",
+      "params_signature": "to: array, subject: string, body: string, cc?: array, bcc?: array, saveAsDraft?: boolean, importance?: 'low'|'normal'|'high'",
+      "use": "Send or draft an Outlook email via Latch to the given recipients.",
+      "returns": "success/error status",
+      "schema_sha": "c00153bde97c5e4e"
+    },
+    "latch_create_reply_draft": {
+      "name": "latch_create_reply_draft",
+      "params_signature": "messageId: string, message: string, cc?: array, bcc?: array",
+      "use": "Create a draft reply to an Outlook email message via Latch without sending it.",
+      "returns": "see tool response",
+      "schema_sha": "091a0241ce6436c6"
+    },
+    "latch_create_reply_all_draft": {
+      "name": "latch_create_reply_all_draft",
+      "params_signature": "messageId: string, message: string, cc?: array, bcc?: array",
+      "use": "Create an Outlook draft reply-all to the specified email message without sending it, via Latch.",
+      "returns": "see tool response",
+      "schema_sha": "90eaf22b8076771d"
+    },
+    "latch_create_forward_draft": {
+      "name": "latch_create_forward_draft",
+      "params_signature": "messageId: string, message?: string, toRecipients: array, cc?: array, bcc?: array",
+      "use": "Create an Outlook draft forwarding the specified email to given recipients without sending it.",
+      "returns": "Draft message object, typically including id and recipient fields.",
+      "schema_sha": "15a5b3ce616dcb92"
+    },
+    "latch_reply_to_email": {
+      "name": "latch_reply_to_email",
+      "params_signature": "messageId: string, message: string, cc?: array, bcc?: array, replyAll?: boolean",
+      "use": "Reply to an Outlook email message; set replyAll=true to reply to all recipients (default false replies only to sender).",
+      "returns": "success/error status",
+      "schema_sha": "492ec2d5b300b98a"
+    },
+    "latch_forward_email": {
+      "name": "latch_forward_email",
+      "params_signature": "messageId: string, message?: string, toRecipients: array<string>",
+      "use": "Forward an Outlook email message to one or more recipients, optionally including additional message content.",
+      "returns": "success/error status",
+      "schema_sha": "fd5b4ed4281d3274"
+    },
+    "latch_send_draft": {
+      "name": "latch_send_draft",
+      "params_signature": "messageId: string",
+      "use": "Send a previously created Outlook draft message via Latch.",
+      "returns": "success/error status",
+      "schema_sha": "081f1901dab46fd4"
+    },
+    "latch_mark_email_read": {
+      "name": "latch_mark_email_read",
+      "params_signature": "messageIds: array, isRead: boolean",
+      "use": "Mark one or more Outlook emails as read (isRead=true) or unread (isRead=false); supports bulk action via multiple message IDs.",
+      "returns": "success/error status",
+      "schema_sha": "da808e575e6b75ca"
+    },
+    "latch_delete_email": {
+      "name": "latch_delete_email",
+      "params_signature": "messageIds: array",
+      "use": "Delete one or more Outlook emails by ID via Latch; messages outside the deleted folder are moved there, messages already in it are permanently deleted.",
+      "returns": "success/error status",
+      "schema_sha": "d657109cfc17a107"
+    },
+    "latch_move_email": {
+      "name": "latch_move_email",
+      "params_signature": "messageIds: array<string>, destinationFolder: string",
+      "use": "Move one or more Outlook emails to another folder; server validates allowed source\u2192destination pairs, and 'sent' cannot be a destination.",
+      "returns": "success/error status",
+      "schema_sha": "c2ecfeb020fd4de1"
+    },
+    "latch_copy_email": {
+      "name": "latch_copy_email",
+      "params_signature": "messageIds: array, destinationId: string",
+      "use": "Copy one or more Outlook emails to another folder; destinationId must be one of 'inbox','sent','drafts','deleted','junk','archive','outbox'.",
+      "returns": "success/error status",
+      "schema_sha": "09cee53dd38e6c6f"
+    },
+    "latch_archive_email": {
+      "name": "latch_archive_email",
+      "params_signature": "messageIds: array[string]",
+      "use": "Archive one or more Outlook emails by moving them to the Archive folder; cannot archive messages already in Archive or in Drafts.",
+      "returns": "success/error status",
+      "schema_sha": "09d0cf98ce4d81ea"
+    },
+    "latch_flag_email": {
+      "name": "latch_flag_email",
+      "params_signature": "messageIds: array, flagStatus: 'flagged'|'notFlagged'|'complete'",
+      "use": "Flag, unflag, or mark-complete one or more Outlook emails for follow-up in a single bulk action via Latch.",
+      "returns": "success/error status",
+      "schema_sha": "bc351ee880d6d3d4"
+    },
+    "latch_list_email_attachments": {
+      "name": "latch_list_email_attachments",
+      "params_signature": "messageId: string",
+      "use": "List all attachments for an Outlook email message via Latch.",
+      "returns": "Array of attachment metadata objects for the specified message.",
+      "schema_sha": "a764545ac012d990"
+    },
+    "latch_add_email_attachment": {
+      "name": "latch_add_email_attachment",
+      "params_signature": "messageId: string, name: string, textContent?: string, htmlContent?: string, contentBytes?: string, contentType?: string, isInline?: boolean",
+      "use": "Add an attachment to an Outlook draft message; provide exactly one of textContent, htmlContent, or base64 contentBytes, and contentType auto-detects from extension.",
+      "returns": "see tool response",
+      "schema_sha": "c7d19d19249eeb4f"
+    },
+    "latch_get_email_attachment": {
+      "name": "latch_get_email_attachment",
+      "params_signature": "messageId: string, attachmentId?: string, attachmentName?: string, includeContent?: boolean",
+      "use": "Download an Outlook email attachment by message ID; auto-downloads if only one attachment exists, otherwise specify attachmentId or attachmentName (partial, case-insensitive).",
+      "returns": "Attachment metadata and base64 content, or a list of attachments when multiple exist and none specified.",
+      "schema_sha": "b9e04f3907775276"
+    },
+    "latch_get_email_mime": {
+      "name": "latch_get_email_mime",
+      "params_signature": "messageId: string",
+      "use": "Retrieve the raw MIME representation of an Outlook email message via Latch.",
+      "returns": "MIME-formatted email content",
+      "schema_sha": "900f24d46014930a"
+    },
+    "latch_get_email_delta": {
+      "name": "latch_get_email_delta",
+      "params_signature": "deltaToken?: string, deltaLink?: string, folderId?: string",
+      "use": "Fetch Outlook email changes since last sync; omit tokens for initial sync, then pass returned deltaToken on subsequent calls, optionally scoped to a folder ('inbox','sent','drafts','deleted','junk','archive','outbox').",
+      "returns": "Changed messages plus a new deltaToken/deltaLink to use in the next sync call.",
+      "schema_sha": "4147d00bac26e520"
+    },
+    "latch_list_calendar_events": {
+      "name": "latch_list_calendar_events",
+      "params_signature": "startDateTime?: string, endDateTime?: string, calendarIds?: array",
+      "use": "List Outlook calendar events within an ISO-8601 date range, optionally filtered to specific calendar IDs; defaults to now through one week ahead.",
+      "returns": "Array of calendar event objects; see tool response for fields.",
+      "schema_sha": "22a858565bf3f9e2"
+    },
+    "latch_create_calendar_event": {
+      "name": "latch_create_calendar_event",
+      "params_signature": "subject: string, startDateTime: string, endDateTime: string, calendarId?: string, location?: string, body?: string, attendees?: array, isAllDay?: boolean, isInPersonMeeting?: boolean, importance?: 'low'|'normal'|'high', showAs?: 'free'|'tentative'|'busy'|'oof'|'workingElsewhere', reminderMinutesBeforeStart?: number=15, responseRequested?: boolean, allowForwarding?: boolean, categories?: array, isRecurring?: boolean, recurrenceType?: 'daily'|'weekly'|'monthly'|'yearly', recurrenceInterval?: integer=1, recurrenceDaysOfWeek?: array, recurrenceEndDate?: string",
+      "use": "Create an Outlook calendar event; startDateTime/endDateTime use ISO-8601, recurrenceEndDate uses YYYY-MM-DD, and defaults to an online meeting unless isInPersonMeeting is true.",
+      "returns": "see tool response",
+      "schema_sha": "7b997ab99af539a0"
+    },
+    "latch_get_calendar_event": {
+      "name": "latch_get_calendar_event",
+      "params_signature": "eventId: string",
+      "use": "Retrieve details of a specific Outlook calendar event by its ID via Latch.",
+      "returns": "Event object with fields like subject, start, end, attendees, location.",
+      "schema_sha": "8de107cea10a543f"
+    },
+    "latch_update_calendar_event": {
+      "name": "latch_update_calendar_event",
+      "params_signature": "eventId: string, calendarId?: string, subject?: string, startDateTime?: string, endDateTime?: string, location?: string, body?: string, attendees?: array, isAllDay?: boolean, isInPersonMeeting?: boolean, importance?: 'low'|'normal'|'high', showAs?: 'free'|'tentative'|'busy'|'oof'|'workingElsewhere', reminderMinutesBeforeStart?: number, responseRequested?: boolean, allowForwarding?: boolean, categories?: array, isRecurring?: boolean, recurrenceType?: 'daily'|'weekly'|'monthly'|'yearly', recurrenceInterval?: integer, recurrenceDaysOfWeek?: array, recurrenceEndDate?: string",
+      "use": "Update an existing Outlook calendar event; date-times use ISO-8601, recurrenceEndDate uses YYYY-MM-DD, and categories/calendarId come from their respective list tools.",
+      "returns": "success/error status",
+      "schema_sha": "07b59327c4c84fb7"
+    },
+    "latch_delete_calendar_event": {
+      "name": "latch_delete_calendar_event",
+      "params_signature": "eventId: string",
+      "use": "Delete an Outlook calendar event via Latch by its event ID.",
+      "returns": "success/error status",
+      "schema_sha": "6cf54f97b9c3696b"
+    },
+    "latch_list_calendars": {
+      "name": "latch_list_calendars",
+      "params_signature": "()",
+      "use": "List all calendars in the authenticated user's Outlook mailbox via Latch.",
+      "returns": "Array of calendar objects (id, name, etc.); see tool response",
+      "schema_sha": "5e18eab7663f6109"
+    },
+    "latch_create_calendar": {
+      "name": "latch_create_calendar",
+      "params_signature": "name: string, color?: string",
+      "use": "Create a new Outlook calendar; color accepts a hex value (e.g. '#9d2c2c') or a named preset like darkRed, lightBlue, etc.",
+      "returns": "see tool response",
+      "schema_sha": "ef93109bcd340f23"
+    },
+    "latch_get_calendar_colors": {
+      "name": "latch_get_calendar_colors",
+      "params_signature": "()",
+      "use": "List available Outlook calendar color options with their hex values, matching the UI color picker.",
+      "returns": "Array of color entries with name and hex value.",
+      "schema_sha": "1b2b9d50b8257fdd"
+    },
+    "latch_get_calendar": {
+      "name": "latch_get_calendar",
+      "params_signature": "calendarId: string",
+      "use": "Get details of a specific Outlook calendar via Latch.",
+      "returns": "Calendar object with fields such as id, name, owner, and color.",
+      "schema_sha": "3d0f7949174f0741"
+    },
+    "latch_update_calendar": {
+      "name": "latch_update_calendar",
+      "params_signature": "calendarId: string, name?: string, color?: string",
+      "use": "Update an existing Outlook calendar's name or color via Latch.",
+      "returns": "success/error status",
+      "schema_sha": "a2bca5fe873d9091"
+    },
+    "latch_delete_calendar": {
+      "name": "latch_delete_calendar",
+      "params_signature": "calendarId: string",
+      "use": "Delete an Outlook calendar via Latch.",
+      "returns": "success/error status",
+      "schema_sha": "0c35b155ad8f49ff"
+    },
+    "latch_get_calendar_categories": {
+      "name": "latch_get_calendar_categories",
+      "params_signature": "()",
+      "use": "List all available Outlook calendar categories (tags) that can be assigned to events.",
+      "returns": "Array of category objects, typically with name and color fields.",
+      "schema_sha": "836f25ddc7279822"
+    },
+    "latch_accept_meeting": {
+      "name": "latch_accept_meeting",
+      "params_signature": "eventId: string",
+      "use": "Accept an Outlook meeting invitation via Latch; errors if the event is missing, the user isn't an attendee, or the user is the organizer.",
+      "returns": "success/error status",
+      "schema_sha": "e17fb2f02efdce25"
+    },
+    "latch_decline_meeting": {
+      "name": "latch_decline_meeting",
+      "params_signature": "eventId: string",
+      "use": "Decline an Outlook meeting invitation; errors if the event is missing, the user isn't an attendee, or the user is the organizer.",
+      "returns": "success/error status",
+      "schema_sha": "dc7441431ce70780"
+    },
+    "latch_tentatively_accept_meeting": {
+      "name": "latch_tentatively_accept_meeting",
+      "params_signature": "eventId: string",
+      "use": "Tentatively accept an Outlook meeting invitation; errors if the event doesn't exist, the user isn't an attendee, or the user is the organizer.",
+      "returns": "success/error status",
+      "schema_sha": "6b4f5aadfe18868d"
+    },
+    "latch_cancel_calendar_event": {
+      "name": "latch_cancel_calendar_event",
+      "params_signature": "eventId: string, comment?: string, sendCancellation?: boolean",
+      "use": "Cancel an Outlook calendar event via Latch, marking it cancelled without deletion and optionally notifying attendees (default true).",
+      "returns": "success/error status",
+      "schema_sha": "ac80e0b2ee117ae9"
+    },
+    "latch_list_email_categories": {
+      "name": "latch_list_email_categories",
+      "params_signature": "()",
+      "use": "List all email categories defined in the user's Outlook mailbox via Latch.",
+      "returns": "Array of category objects (e.g. name, color, id).",
+      "schema_sha": "36cb83ee3d42ed50"
+    },
+    "latch_get_email_category": {
+      "name": "latch_get_email_category",
+      "params_signature": "categoryId: number",
+      "use": "Retrieve details of a specific Outlook email category by its numeric ID via Latch.",
+      "returns": "see tool response",
+      "schema_sha": "37469b0310989f09"
+    },
+    "latch_create_email_category": {
+      "name": "latch_create_email_category",
+      "params_signature": "displayName: string, color?: string",
+      "use": "Create a new Outlook email category via Latch; color accepts preset values 'preset0' through 'preset24'.",
+      "returns": "see tool response",
+      "schema_sha": "d373924eb0638e23"
+    },
+    "latch_list_contacts": {
+      "name": "latch_list_contacts",
+      "params_signature": "count?: number, search?: string",
+      "use": "List contacts in the user's Outlook mailbox, optionally filtering by name or email; count defaults to 50, max 250.",
+      "returns": "Array of contact objects with name and email fields.",
+      "schema_sha": "92fddc6bafe11a0b"
+    },
+    "latch_get_contact": {
+      "name": "latch_get_contact",
+      "params_signature": "contactId: string",
+      "use": "Retrieve details of a specific Outlook contact by its ID via Latch.",
+      "returns": "Contact object with fields such as id, displayName, emailAddresses, and phone numbers.",
+      "schema_sha": "d488dcda7e52bbb3"
+    },
+    "latch_create_contact": {
+      "name": "latch_create_contact",
+      "params_signature": "displayName: string, givenName?: string, surname?: string, emailAddresses?: array, businessPhones?: array, mobilePhone?: string, companyName?: string, department?: string, officeLocation?: string, jobTitle?: string, personalNotes?: string",
+      "use": "Create a new Outlook contact via Latch; emailAddresses items are objects with required 'address' and optional 'name'.",
+      "returns": "see tool response",
+      "schema_sha": "bebd09490488c686"
+    },
+    "latch_update_contact": {
+      "name": "latch_update_contact",
+      "params_signature": "contactId: string, displayName?: string, givenName?: string, surname?: string, emailAddresses?: array, businessPhones?: array, mobilePhone?: string, companyName?: string, department?: string, officeLocation?: string, jobTitle?: string, personalNotes?: string",
+      "use": "Update an existing Outlook contact via Latch; only provided fields are modified.",
+      "returns": "see tool response",
+      "schema_sha": "fed15786a1d15739"
+    },
+    "latch_delete_contact": {
+      "name": "latch_delete_contact",
+      "params_signature": "contactId: string",
+      "use": "Delete an Outlook contact via Latch by its contact ID.",
+      "returns": "success/error status",
+      "schema_sha": "cb5a2f819074c0ce"
+    },
+    "latch_search_people": {
+      "name": "latch_search_people",
+      "params_signature": "query: string, limit?: number=10",
+      "use": "Search Outlook for people by name or email, ranked by relevance based on email history, shared events, and organization.",
+      "returns": "List of people with name, email, and relevance details",
+      "schema_sha": "3d1c161ebfa31c07"
+    },
+    "latch_list_todo_lists": {
+      "name": "latch_list_todo_lists",
+      "params_signature": "limit?: integer, offset?: integer",
+      "use": "List the current user's Microsoft To Do task lists via Latch (Outlook); defaults to 50 lists, max 200.",
+      "returns": "see tool response",
+      "schema_sha": "79158a8b508253da"
+    },
+    "latch_get_todo_list": {
+      "name": "latch_get_todo_list",
+      "params_signature": "listId: string, includeCompleted?: boolean",
+      "use": "Fetch a single Outlook To-Do task list by ID along with its tasks.",
+      "returns": "List object with tasks array containing title, dueDateTime, importance, and status.",
+      "schema_sha": "c9d6e01371a87593"
+    },
+    "latch_create_todo_list": {
+      "name": "latch_create_todo_list",
+      "params_signature": "displayName: string",
+      "use": "Create a new Outlook To-Do task list with the given display name.",
+      "returns": "Created list object with id and displayName.",
+      "schema_sha": "28146107a11e8584"
+    },
+    "latch_update_todo_list": {
+      "name": "latch_update_todo_list",
+      "params_signature": "listId: string, displayName: string",
+      "use": "Rename an existing Outlook To-Do task list.",
+      "returns": "success/error status",
+      "schema_sha": "ece9da30e25f156f"
+    },
+    "latch_delete_todo_list": {
+      "name": "latch_delete_todo_list",
+      "params_signature": "listId: string",
+      "use": "Delete an Outlook To-Do task list via Latch.",
+      "returns": "success/error status",
+      "schema_sha": "6e88930e793468af"
+    },
+    "latch_list_todo_tasks": {
+      "name": "latch_list_todo_tasks",
+      "params_signature": "listId?: string, limit?: integer=50, offset?: integer=0, status?: integer, importance?: integer, sortBy?: 'createdDateTime'|'dueDateTime'|'importance'|'title', sortDirection?: 'asc'|'desc'",
+      "use": "List tasks in an Outlook To-Do list, defaulting to the 'Tasks' list; status 0=notStarted/1=completed, importance 0=normal/1=high filtered client-side.",
+      "returns": "Array of task objects with fields like id, title, status, importance, createdDateTime, dueDateTime.",
+      "schema_sha": "3dec6a2738feebc0"
+    },
+    "latch_get_todo_task": {
+      "name": "latch_get_todo_task",
+      "params_signature": "listId?: string, taskId: string",
+      "use": "Retrieve a single Outlook To Do task by ID; if listId is omitted, the default 'Tasks' list is used.",
+      "returns": "Task object with fields such as id, title, status, and dueDateTime.",
+      "schema_sha": "5ebda76a0e32bf3f"
+    },
+    "latch_create_todo_task": {
+      "name": "latch_create_todo_task",
+      "params_signature": "listId?: string, title: string, body?: string, importance?: integer, status?: integer, dueDateTime?: string, reminderDateTime?: string, recurrence?: 'daily'|'weekdays'|'weekly'|'monthly'|'yearly', categories?: array",
+      "use": "Create an Outlook To-Do task; omit listId to use/create the default 'Tasks' list, dates are UTC ISO-8601, importance/status are 0|1, categories accept 'myDay:YYYY-MM-DD'.",
+      "returns": "see tool response",
+      "schema_sha": "209d3e8258581b20"
+    },
+    "latch_update_todo_task": {
+      "name": "latch_update_todo_task",
+      "params_signature": "listId?: string, taskId: string, title?: string, body?: string, importance?: integer, status?: integer, dueDateTime?: string, reminderDateTime?: string, recurrence?: 'daily'|'weekdays'|'weekly'|'monthly'|'yearly', categories?: array",
+      "use": "Update an Outlook To-Do task; importance/status use 0/1 ints, date fields are UTC ISO-8601, set reminderDateTime/recurrence to null to clear, categories accept color names or 'myDay:YYYY-MM-DD'.",
+      "returns": "see tool response",
+      "schema_sha": "a8184ed3ea450b07"
+    },
+    "latch_delete_todo_task": {
+      "name": "latch_delete_todo_task",
+      "params_signature": "listId?: string, taskId: string",
+      "use": "Delete a task from an Outlook To Do list via Latch; defaults to the 'Tasks' list when listId is omitted.",
+      "returns": "success/error status",
+      "schema_sha": "b17c27f03c3e3ce9"
+    },
+    "latch_list_todo_steps": {
+      "name": "latch_list_todo_steps",
+      "params_signature": "listId?: string, taskId: string",
+      "use": "List steps (subtasks) of an Outlook To Do task; defaults to the 'Tasks' list if listId is omitted.",
+      "returns": "Array of step objects with fields like id, displayName, and isChecked.",
+      "schema_sha": "675c48ff3c3629bb"
+    },
+    "latch_create_todo_step": {
+      "name": "latch_create_todo_step",
+      "params_signature": "listId?: string, taskId: string, displayName: string, isChecked?: boolean",
+      "use": "Create a step (subtask) under an Outlook to-do task; if listId is omitted, the default 'Tasks' list is used.",
+      "returns": "see tool response",
+      "schema_sha": "80658fee2530cfbb"
+    },
+    "latch_get_todo_step": {
+      "name": "latch_get_todo_step",
+      "params_signature": "stepId: string",
+      "use": "Fetch a single Latch (Outlook) todo step by its ID.",
+      "returns": "see tool response",
+      "schema_sha": "09e7d32d7b1126e3"
+    },
+    "latch_update_todo_step": {
+      "name": "latch_update_todo_step",
+      "params_signature": "stepId: string, displayName?: string, isChecked?: boolean",
+      "use": "Update a todo step's name or checked status by its step ID in Latch (Outlook).",
+      "returns": "success/error status",
+      "schema_sha": "0c0edab167b3aea9"
+    },
+    "latch_delete_todo_step": {
+      "name": "latch_delete_todo_step",
+      "params_signature": "stepId: string",
+      "use": "Delete a Latch (Outlook) todo step by its ID.",
+      "returns": "success/error status",
+      "schema_sha": "d0cacd286f91e1ca"
+    },
+    "latch_get_todo_counts": {
+      "name": "latch_get_todo_counts",
+      "params_signature": "",
+      "use": "Get smart-list and per-list todo counts for Latch (Outlook), matching the client UI.",
+      "returns": "see tool response",
+      "schema_sha": "1af23dd119bf7937"
+    },
+    "latch_create_task_from_email": {
+      "name": "latch_create_task_from_email",
+      "params_signature": "emailId: string",
+      "use": "Create a Microsoft To-Do task from a flagged Outlook email, mirroring the client's flagged-email integration.",
+      "returns": "see tool response",
+      "schema_sha": "0a15751f9ce5ea7f"
+    },
+    "latch_list_todo_smart_list_tasks": {
+      "name": "latch_list_todo_smart_list_tasks",
+      "params_signature": "smartListType: 'myday'|'important'|'planned'|'tasks'|'flagged', limit?: integer, offset?: integer, orderby?: string",
+      "use": "List Outlook To Do tasks for a smart list (myday, important, planned, tasks, or flagged), including active and completed; default limit 50, default sort createdDateTime desc.",
+      "returns": "Task list with fields like id, title, status, importance, dueDateTime; planned type groups by earlier/today/tomorrow/next5days/later.",
+      "schema_sha": "d27a7baa8aeebcf7"
+    },
+    "latch_list_teams": {
+      "name": "latch_list_teams",
+      "params_signature": "()",
+      "use": "List all Microsoft Teams the current user is a member of via the Latch Outlook integration.",
+      "returns": "Array of teams with name, description, and id fields.",
+      "schema_sha": "620a3bcc1c961adc"
+    },
+    "latch_get_team": {
+      "name": "latch_get_team",
+      "params_signature": "teamId: string",
+      "use": "Retrieve detailed information about a specific Microsoft Team via Latch (Outlook).",
+      "returns": "Team object with displayName, description, visibility, and other settings.",
+      "schema_sha": "4abacf1dd041cb9c"
+    },
+    "latch_list_team_members": {
+      "name": "latch_list_team_members",
+      "params_signature": "teamId: string",
+      "use": "List all members of a specific Microsoft Team via Latch (Outlook).",
+      "returns": "Array of team member objects; see tool response",
+      "schema_sha": "b3cef409434563ac"
+    },
+    "latch_list_team_channels": {
+      "name": "latch_list_team_channels",
+      "params_signature": "teamId: string",
+      "use": "List all channels within a specified Microsoft Team via Latch (Outlook).",
+      "returns": "Array of channel objects with fields like id, displayName, and description.",
+      "schema_sha": "3f0d3b25d1dd6b99"
+    },
+    "latch_get_channel": {
+      "name": "latch_get_channel",
+      "params_signature": "teamId: string, channelId: string",
+      "use": "Retrieve detailed information about a specific channel within a Microsoft Teams team via Latch (Outlook).",
+      "returns": "Channel object with displayName, description, membershipType, and webUrl.",
+      "schema_sha": "81c377b44e7d17b1"
+    },
+    "latch_create_channel": {
+      "name": "latch_create_channel",
+      "params_signature": "teamId: string, displayName: string, description?: string, membershipType?: 'standard'|'private'|'shared'",
+      "use": "Create a new channel in a Microsoft Team via Outlook Latch; displayName is limited to 50 characters and membershipType defaults to standard.",
+      "returns": "see tool response",
+      "schema_sha": "df25d0e0dc52725f"
+    },
+    "latch_get_channel_messages": {
+      "name": "latch_get_channel_messages",
+      "params_signature": "teamId: string, channelId: string, limit?: number",
+      "use": "Retrieve recent messages from a specific channel in a Microsoft Team via Outlook/Latch; limit defaults to 20, max 50.",
+      "returns": "List of channel message objects",
+      "schema_sha": "f7507690fca87b1e"
+    },
+    "latch_get_channel_message": {
+      "name": "latch_get_channel_message",
+      "params_signature": "teamId: string, channelId: string, messageId: string",
+      "use": "Retrieve a specific message from a Microsoft Teams channel (via Latch/Outlook) by its ID, including content, sender, and attachments.",
+      "returns": "Message object with content, sender, attachments, and metadata.",
+      "schema_sha": "778fa818fa3dcf46"
+    },
+    "latch_send_channel_message": {
+      "name": "latch_send_channel_message",
+      "params_signature": "teamId: string, channelId: string, message: string",
+      "use": "Send a message to a specific channel in a Microsoft Team via Latch (Outlook).",
+      "returns": "success/error status",
+      "schema_sha": "c770521f756ef3cd"
+    },
+    "latch_update_channel_message": {
+      "name": "latch_update_channel_message",
+      "params_signature": "teamId: string, channelId: string, messageId: string, content: string, contentType?: 'text'|'html'",
+      "use": "Edit the content of an existing Teams channel message via Latch (Outlook); only the original sender can update their own messages.",
+      "returns": "success/error status",
+      "schema_sha": "c96e215cba4325a1"
+    },
+    "latch_delete_channel_message": {
+      "name": "latch_delete_channel_message",
+      "params_signature": "teamId: string, channelId: string, messageId: string",
+      "use": "Soft delete a message from a Latch (Outlook) channel, marking it as deleted without permanent removal.",
+      "returns": "success/error status",
+      "schema_sha": "e8b0119bbb63d853"
+    },
+    "latch_list_drives": {
+      "name": "latch_list_drives",
+      "params_signature": "()",
+      "use": "List all SharePoint document libraries (drives) accessible to the current user via their Team memberships in Latch (Outlook).",
+      "returns": "Array of drive objects associated with the user's Teams.",
+      "schema_sha": "51795116240040ae"
+    },
+    "latch_list_drive_items": {
+      "name": "latch_list_drive_items",
+      "params_signature": "driveId: string, folderId?: string, top?: number, skip?: number",
+      "use": "List files and folders in a SharePoint drive via Outlook/Latch; omit folderId or pass 'root' for the drive root.",
+      "returns": "Array of drive items (files/folders) with metadata; see tool response.",
+      "schema_sha": "021e33f6887f7781"
+    },
+    "latch_get_drive_item": {
+      "name": "latch_get_drive_item",
+      "params_signature": "driveId: string, itemId: string",
+      "use": "Retrieve detailed metadata for a specific file or folder in a SharePoint drive via Latch (Outlook).",
+      "returns": "Drive item object with fields like id, name, size, and type.",
+      "schema_sha": "7fdc776c2f4a8be7"
+    },
+    "latch_upload_drive_item": {
+      "name": "latch_upload_drive_item",
+      "params_signature": "driveId: string, parentId: string, fileName: string, content: string, contentType?: string",
+      "use": "Upload a base64-encoded file (max 5MB) to a SharePoint drive folder; use 'root' as parentId for the drive root.",
+      "returns": "Uploaded drive item metadata (id, name, size, etc.)",
+      "schema_sha": "40af87cfc6db0e30"
+    },
+    "latch_update_drive_item": {
+      "name": "latch_update_drive_item",
+      "params_signature": "driveId: string, itemId: string, name?: string, newParentId?: string",
+      "use": "Rename or move a file/folder in a SharePoint drive via Latch (Outlook); supply name to rename, newParentId to move, or both.",
+      "returns": "Updated drive item object (id, name, parent info).",
+      "schema_sha": "321c3daaf564939d"
+    },
+    "latch_delete_drive_item": {
+      "name": "latch_delete_drive_item",
+      "params_signature": "driveId: string, itemId: string",
+      "use": "Soft-delete a file or folder from a SharePoint drive via Outlook Latch; deleted items may be recoverable.",
+      "returns": "success/error status",
+      "schema_sha": "9b9f5a9a03de61ff"
+    },
+    "latch_create_folder": {
+      "name": "latch_create_folder",
+      "params_signature": "driveId: string, parentId: string, name: string",
+      "use": "Create a new folder in a SharePoint drive; pass 'root' as parentId to create at the drive root.",
+      "returns": "see tool response",
+      "schema_sha": "f62de80ac4d355bd"
+    }
+  }
+}

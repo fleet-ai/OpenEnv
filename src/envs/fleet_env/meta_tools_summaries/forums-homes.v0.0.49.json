@@ -1,0 +1,952 @@
+{
+  "version": 1,
+  "env_key": "forums-homes",
+  "env_version": "v0.0.49",
+  "tools": {
+    "agora_get_frontpage_posts": {
+      "name": "agora_get_frontpage_posts",
+      "params_signature": "sort?: 'hot'|'best'|'new'|'rising'|'top'|'controversial', t?: 'hour'|'day'|'week'|'month'|'year'|'all', limit?: integer, after?: string, before?: string, count?: integer, show?: string",
+      "use": "Fetch frontpage posts from Agora (Reddit); use 't' only with 'top'/'controversial' sorts, and 'after'/'before' take fullnames like t3_abc123; default limit 25, max 100.",
+      "returns": "Reddit Listing with children (posts), after, before for pagination.",
+      "schema_sha": "8bab7db449312dc8"
+    },
+    "agora_get_post_content": {
+      "name": "agora_get_post_content",
+      "params_signature": "article: string, subreddit?: string, comment?: string, context?: integer, depth?: integer, limit?: integer, sort?: string, showedits?: boolean, showmedia?: boolean, showmore?: boolean, showtitle?: boolean, sr_detail?: boolean",
+      "use": "Fetch a Reddit post and its comment tree; pass article as the ID36 without the t3_ prefix, and comment (if used) as a bare ID36.",
+      "returns": "Post details and a nested comments tree sorted by the chosen order.",
+      "schema_sha": "f6c37e071a28222f"
+    },
+    "agora_get_subreddit_info": {
+      "name": "agora_get_subreddit_info",
+      "params_signature": "subreddit: string",
+      "use": "Get information about a subreddit including subscribers, description, and rules; provide the name without the 'r/' prefix.",
+      "returns": "Subreddit info object with fields like subscribers, description, and rules.",
+      "schema_sha": "07077fbc4a9fc575"
+    },
+    "agora_get_subreddit_posts": {
+      "name": "agora_get_subreddit_posts",
+      "params_signature": "subreddit: string, sort?: 'hot'|'best'|'new'|'rising'|'top'|'controversial', t?: 'hour'|'day'|'week'|'month'|'year'|'all', limit?: integer, after?: string, before?: string, count?: integer, show?: string",
+      "use": "Fetch posts from a subreddit (name without r/ prefix); t applies only to top/controversial sorts; after/before take t3_-style fullnames; limit defaults to 25, max 100.",
+      "returns": "Reddit Listing with children (posts), after, and before cursors.",
+      "schema_sha": "a1a61426864c8c80"
+    },
+    "agora_list_subreddits": {
+      "name": "agora_list_subreddits",
+      "params_signature": "where?: 'popular'|'new'|'default', limit?: integer, after?: string, before?: string, count?: integer",
+      "use": "List subreddits on Agora (Reddit) by category; use `after`/`before` fullnames for pagination; default limit is 25, max 100.",
+      "returns": "Reddit Listing of subreddit objects with fields like children, after, before.",
+      "schema_sha": "89a3dae552851781"
+    },
+    "agora_search_subreddits": {
+      "name": "agora_search_subreddits",
+      "params_signature": "query: string, exact?: boolean, include_over_18?: boolean, include_unadvertisable?: boolean",
+      "use": "Search Agora (Reddit) subreddits whose names begin with the query string.",
+      "returns": "List of matching subreddits with names and metadata; see tool response.",
+      "schema_sha": "4547ed4a17f27a07"
+    },
+    "agora_create_subreddit": {
+      "name": "agora_create_subreddit",
+      "params_signature": "name: string, title?: string, description: string, public_description?: string, subreddit_type?: 'public'|'restricted'|'private', over_18?: boolean",
+      "use": "Create a new Agora (Reddit) subreddit; name must be 3-21 chars of alphanumerics/underscores.",
+      "returns": "see tool response",
+      "schema_sha": "0fdae873538fc56b"
+    },
+    "agora_subscribe": {
+      "name": "agora_subscribe",
+      "params_signature": "action: 'sub'|'unsub', sr?: string, sr_name?: string, skip_initial_defaults?: boolean",
+      "use": "Subscribe to or unsubscribe from a subreddit; identify it via sr (t5_ fullname) or sr_name (plain name without r/ prefix).",
+      "returns": "success/error status",
+      "schema_sha": "c89869ca1ffc99ca"
+    },
+    "agora_get_subreddit_rules": {
+      "name": "agora_get_subreddit_rules",
+      "params_signature": "subreddit: string",
+      "use": "Fetch the community rules and posting guidelines for a subreddit; provide the name without the 'r/' prefix.",
+      "returns": "Rules list with fields like short_name, description, and priority.",
+      "schema_sha": "c3f81eedaede2f09"
+    },
+    "agora_subreddits_mine": {
+      "name": "agora_subreddits_mine",
+      "params_signature": "limit?: integer, after?: string, before?: string, count?: integer",
+      "use": "List subreddits the authenticated Reddit user is subscribed to; use fullname cursors (e.g. 't5_') for after/before pagination, default limit 25, max 100.",
+      "returns": "Reddit Listing with children array of subreddit objects, plus after/before cursors.",
+      "schema_sha": "d7c2e91199a796b7"
+    },
+    "agora_get_subreddit_moderators": {
+      "name": "agora_get_subreddit_moderators",
+      "params_signature": "subreddit: string",
+      "use": "List the moderators of a subreddit on Agora (Reddit); provide the name without the 'r/' prefix.",
+      "returns": "A UserList object containing moderator user entries.",
+      "schema_sha": "8647802f62da7998"
+    },
+    "agora_submit": {
+      "name": "agora_submit",
+      "params_signature": "sr: string, title: string, kind: 'self'|'link'|'image'|'video'|'videogif', text: string, url?: string, flair_id?: string, flair_text?: string, nsfw?: boolean, spoiler?: boolean, resubmit?: boolean, sendreplies?: boolean",
+      "use": "Submit a new post to a subreddit (name without r/ prefix); title max 300 chars, text is markdown for self posts, url required for link posts.",
+      "returns": "Submission result with new post id/url or success/error status",
+      "schema_sha": "e3e9ced0efec7cf3"
+    },
+    "agora_comment": {
+      "name": "agora_comment",
+      "params_signature": "thing_id: string, text: string, return_rtjson?: boolean, richtext_json?: string",
+      "use": "Submit a comment on an Agora (Reddit) post or reply to another comment; thing_id uses t3_ prefix for posts, t1_ for comments, text is markdown (max 10000 chars).",
+      "returns": "Created comment object; rich text JSON if return_rtjson is true.",
+      "schema_sha": "f91f533fe2751ae5"
+    },
+    "agora_vote": {
+      "name": "agora_vote",
+      "params_signature": "id: string, dir: integer, rank?: integer",
+      "use": "Cast a vote on an Agora (Reddit) post or comment; use fullname IDs ('t3_' for posts, 't1_' for comments) and dir 1=up, 0=unvote, -1=down.",
+      "returns": "success/error status",
+      "schema_sha": "d3a87d692d250b07"
+    },
+    "agora_del": {
+      "name": "agora_del",
+      "params_signature": "id: string",
+      "use": "Delete one of your own Agora (Reddit) posts or comments by fullname; use 't3_' prefix for posts and 't1_' for comments.",
+      "returns": "success/error status",
+      "schema_sha": "82f9457beb386195"
+    },
+    "agora_editusertext": {
+      "name": "agora_editusertext",
+      "params_signature": "thing_id: string, text: string, return_rtjson?: boolean",
+      "use": "Edit the markdown body of a self-post or comment; thing_id must be a fullname ('t3_' for posts, 't1_' for comments).",
+      "returns": "success/error status",
+      "schema_sha": "f3e3b3517209adc3"
+    },
+    "agora_save": {
+      "name": "agora_save",
+      "params_signature": "id: string, category?: string",
+      "use": "Save a post or comment on Agora (Reddit) using its fullname (t3_ prefix for posts, t1_ for comments); category requires Reddit Gold.",
+      "returns": "success/error status",
+      "schema_sha": "46456282f9a21ba3"
+    },
+    "agora_unsave": {
+      "name": "agora_unsave",
+      "params_signature": "id: string",
+      "use": "Unsave a previously saved Agora (Reddit) post or comment using its fullname ('t3_' prefix for posts, 't1_' for comments).",
+      "returns": "success/error status",
+      "schema_sha": "11bcd72c21a0686b"
+    },
+    "agora_hide": {
+      "name": "agora_hide",
+      "params_signature": "id: string",
+      "use": "Hide posts from your Agora (Reddit) frontpage by passing a comma-separated list of post fullnames prefixed with 't3_'.",
+      "returns": "success/error status",
+      "schema_sha": "a432ca2ad9d50072"
+    },
+    "agora_unhide": {
+      "name": "agora_unhide",
+      "params_signature": "id: string",
+      "use": "Unhide one or more Reddit posts; pass a comma-separated list of post fullnames prefixed with 't3_'.",
+      "returns": "success/error status",
+      "schema_sha": "8a2c795cd8758d54"
+    },
+    "agora_info": {
+      "name": "agora_info",
+      "params_signature": "id?: string, url?: string, sr_name?: string",
+      "use": "Look up Agora (Reddit) posts/comments by fullname (t3_ for posts, t1_ for comments), URL, or subreddit names; id accepts comma-separated fullnames.",
+      "returns": "Listing of Thing objects with fields like id, name, kind, and data.",
+      "schema_sha": "c66978f9d7dffe9f"
+    },
+    "agora_follow_post": {
+      "name": "agora_follow_post",
+      "params_signature": "fullname: string, follow: boolean",
+      "use": "Follow or unfollow an Agora (Reddit) post to receive new-comment notifications; fullname must use the 't3_' post prefix.",
+      "returns": "success/error status",
+      "schema_sha": "975eb12e69dccd8b"
+    },
+    "agora_morechildren": {
+      "name": "agora_morechildren",
+      "params_signature": "link_id: string, children: string, sort?: string, depth?: integer, limit_children?: boolean, id?: string",
+      "use": "Load additional Reddit comments from a 'more comments' expansion; link_id must be a t3_ fullname and children is a CSV of comment id36s.",
+      "returns": "Object with things array of additional comment nodes.",
+      "schema_sha": "88d8fee571d665d9"
+    },
+    "agora_get_user": {
+      "name": "agora_get_user",
+      "params_signature": "username: string, where?: 'about'|'overview'|'submitted'|'comments'|'saved'|'hidden'|'upvoted'|'downvoted', sort?: 'hot'|'new'|'top'|'controversial', t?: 'hour'|'day'|'week'|'month'|'year'|'all', type?: 'links'|'comments', limit?: integer, after?: string, before?: string, count?: integer, context?: integer, sr_detail?: boolean",
+      "use": "Fetch a Reddit user's profile or activity (posts, comments, saved, etc.); after/before take thing fullnames, limit defaults to 25 (max 100).",
+      "returns": "User object (for about) or Listing with children, after, before for activity sections.",
+      "schema_sha": "5306ae46694cc1c4"
+    },
+    "agora_search_users": {
+      "name": "agora_search_users",
+      "params_signature": "q: string, sort?: 'relevance'|'activity', limit?: integer, after?: string, before?: string, count?: integer",
+      "use": "Search Agora (Reddit) users by username; use after/before with a t2_ fullname for pagination.",
+      "returns": "Listing of user objects with fields like children, after, before.",
+      "schema_sha": "b05282254dea9a79"
+    },
+    "agora_me": {
+      "name": "agora_me",
+      "params_signature": "",
+      "use": "Get information about the currently authenticated Agora (Reddit) user.",
+      "returns": "User object with fields such as id, name, karma, and account metadata.",
+      "schema_sha": "99837e34def7e5fe"
+    },
+    "agora_me_karma": {
+      "name": "agora_me_karma",
+      "params_signature": "()",
+      "use": "Get the authenticated user's karma breakdown by subreddit on Agora (Reddit).",
+      "returns": "List of per-subreddit karma entries with fields like sr, comment_karma, link_karma.",
+      "schema_sha": "146a41ae12f42636"
+    },
+    "agora_search": {
+      "name": "agora_search",
+      "params_signature": "q: string, subreddit?: string, restrict_sr?: boolean, sort?: 'relevance'|'hot'|'top'|'new'|'comments', t?: 'hour'|'day'|'week'|'month'|'year'|'all', type?: 'link'|'comment'|'sr'|'user', limit?: integer, after?: string, before?: string, count?: integer, include_facets?: boolean, sr_detail?: boolean",
+      "use": "Search Reddit for posts, comments, subreddits, or users; use after/before with fullname IDs (t3_, t1_, t5_, t2_) for pagination, limit defaults to 25 (max 100).",
+      "returns": "Reddit Listing object with children array of matching things and after/before pagination cursors.",
+      "schema_sha": "0a42f74afd1b738e"
+    },
+    "agora_save_post_draft": {
+      "name": "agora_save_post_draft",
+      "params_signature": "subreddit_name: string, title: string, post_type?: 'text'|'self'|'link'|'image'|'video'|'videogif', content?: string, url?: string, is_nsfw?: boolean, is_spoiler?: boolean, flair_text?: string",
+      "use": "Save or update a Reddit post draft for later publishing; title max 300 chars, post_type defaults to 'text', is_nsfw/is_spoiler default to false.",
+      "returns": "see tool response",
+      "schema_sha": "1ecca7def89ae0fd"
+    },
+    "agora_get_post_draft": {
+      "name": "agora_get_post_draft",
+      "params_signature": "draft_id: string",
+      "use": "Retrieve details of a specific Agora (Reddit) post draft by its draft ID.",
+      "returns": "Draft object with fields such as id, title, body, subreddit, and timestamps.",
+      "schema_sha": "0dc2fa85998adefc"
+    },
+    "agora_list_post_drafts": {
+      "name": "agora_list_post_drafts",
+      "params_signature": "()",
+      "use": "List all post drafts belonging to the currently authenticated Agora (Reddit) user.",
+      "returns": "Array of draft objects; see tool response",
+      "schema_sha": "5dfb42baa53651a6"
+    },
+    "agora_publish_post_draft": {
+      "name": "agora_publish_post_draft",
+      "params_signature": "subreddit_name: string, draft_id: string",
+      "use": "Publish a saved Agora (Reddit) draft as a post in the given subreddit and delete the draft.",
+      "returns": "success/error status",
+      "schema_sha": "39b46c6753ab3a34"
+    },
+    "agora_delete_post_draft": {
+      "name": "agora_delete_post_draft",
+      "params_signature": "draft_id: string",
+      "use": "Delete a Reddit post draft by its draft ID.",
+      "returns": "success/error status",
+      "schema_sha": "d9be45c209e02568"
+    },
+    "nest_zillow_ping": {
+      "name": "nest_zillow_ping",
+      "params_signature": "message?: string",
+      "use": "Ping the Zillow API to test connectivity, measure response time, and retrieve metadata about available filter options like property and listing types.",
+      "returns": "Status, response time, and API metadata including available filter options.",
+      "schema_sha": "84e28d9c9f27e2f4"
+    },
+    "nest_zillow_getPropertyTypes": {
+      "name": "nest_zillow_getPropertyTypes",
+      "params_signature": "()",
+      "use": "List all property types available as search filters, including descriptions and database mappings shared with the frontend UI.",
+      "returns": "Array of property type objects with name, description, and database mapping fields.",
+      "schema_sha": "0d4b5fc72805d662"
+    },
+    "nest_zillow_searchListings": {
+      "name": "nest_zillow_searchListings",
+      "params_signature": "location?: string, listing_type?: 'for_sale'|'for_rent'|'sold', min_price?: number, max_price?: number, min_beds?: integer, max_beds?: integer, min_baths?: number, max_baths?: number, property_types?: array, has_photos?: boolean, has_3d_tour?: boolean, has_pool?: boolean, has_garage?: boolean, no_hoa?: boolean, limit?: integer, offset?: integer",
+      "use": "Search active Zillow listings (for sale, rent, or sold) by location, price, beds/baths, property type, and feature filters; location accepts city, state, ZIP, or address.",
+      "returns": "List of matching property listings with details like price, address, beds, baths, and features.",
+      "schema_sha": "9deff705e5694141"
+    },
+    "nest_zillow_getListingDetails": {
+      "name": "nest_zillow_getListingDetails",
+      "params_signature": "listing_id: string|number",
+      "use": "Get comprehensive details for a Zillow real estate listing including features, photos, pricing, price/tax history, schools, open houses, and agent info.",
+      "returns": "Listing object with property facts, photos, priceHistory, taxHistory, schools, openHouses, agent, and engagement metrics.",
+      "schema_sha": "bd3d90633f0ac9a9"
+    },
+    "nest_zillow_calculateMortgage": {
+      "name": "nest_zillow_calculateMortgage",
+      "params_signature": "home_price: number, down_payment: number, loan_term_years?: integer, interest_rate: number, property_tax_annual?: number, home_insurance_annual?: number, hoa_monthly?: number, pmi_rate?: number",
+      "use": "Calculate monthly mortgage payment and total costs given home price, down payment, and interest rate, with optional taxes, insurance, HOA, and PMI inputs.",
+      "returns": "see tool response",
+      "schema_sha": "e25fba54e3fa580f"
+    },
+    "nest_zillow_searchSchools": {
+      "name": "nest_zillow_searchSchools",
+      "params_signature": "min_rating?: number, limit?: integer, offset?: integer",
+      "use": "Search Zillow schools, optionally filtering by minimum rating (0-10), with pagination via limit (1-100) and offset.",
+      "returns": "List of schools with rating, enrollment, and type fields.",
+      "schema_sha": "469371e1dc98068c"
+    },
+    "nest_zillow_getPropertyValuation": {
+      "name": "nest_zillow_getPropertyValuation",
+      "params_signature": "property_id: string",
+      "use": "Get the Zestimate property valuation for a Zillow listing by its listing_id.",
+      "returns": "Estimated value with confidence score and value range.",
+      "schema_sha": "2440619cbf5ef1d9"
+    },
+    "nest_zillow_savedHomes": {
+      "name": "nest_zillow_savedHomes",
+      "params_signature": "action: 'save'|'unsave'|'list'|'get', property_id?: string, notes?: string, status?: array, limit?: integer, offset?: integer",
+      "use": "Manage the logged-in user's saved Zillow properties; property_id is required for save/unsave/get, status filter and limit/offset apply to list.",
+      "returns": "Saved property record(s) or list with pagination; success/error status for save/unsave.",
+      "schema_sha": "db20558de7bd1ed9"
+    },
+    "nest_zillow_savedSearches": {
+      "name": "nest_zillow_savedSearches",
+      "params_signature": "action: 'create'|'list'|'get'|'update'|'delete', search_id?: string, name?: string, filters?: object, frequency?: 'instant'|'daily'|'never', email_alerts?: boolean, limit?: integer, offset?: integer",
+      "use": "Manage the logged-in user's saved Zillow searches; requires authentication, search_id is needed for get/update/delete, and deletes are soft (recoverable).",
+      "returns": "see tool response",
+      "schema_sha": "804093632530e0e8"
+    },
+    "nest_zillow_scheduleTour": {
+      "name": "nest_zillow_scheduleTour",
+      "params_signature": "listing_id: string, date: string, time: string, tour_type?: 'in_person'|'virtual'|'self_guided', attendee_name?: string, attendee_email?: string, attendee_phone?: string, special_requests?: string",
+      "use": "Schedule a Zillow property tour; date must be YYYY-MM-DD and time HH:MM, attendee_email must be a valid email.",
+      "returns": "see tool response",
+      "schema_sha": "216a1ad038b45743"
+    },
+    "nest_zillow_listTours": {
+      "name": "nest_zillow_listTours",
+      "params_signature": "status_filter?: 'pending'|'scheduled'|'completed'|'cancelled', listing_id?: string, limit?: integer, offset?: integer",
+      "use": "List scheduled Zillow property tours, optionally filtered by status or listing, with pagination via limit (1-100) and offset.",
+      "returns": "Array of tour records; see tool response for exact shape.",
+      "schema_sha": "f67e232a2a34fd52"
+    },
+    "nest_zillow_cancelTour": {
+      "name": "nest_zillow_cancelTour",
+      "params_signature": "tour_id: string, reason?: string",
+      "use": "Cancel a previously scheduled Zillow home tour by its tour ID, optionally providing a cancellation reason.",
+      "returns": "success/error status",
+      "schema_sha": "1fd13cba73cb34e6"
+    },
+    "nest_zillow_rescheduleTour": {
+      "name": "nest_zillow_rescheduleTour",
+      "params_signature": "tour_id: string, date: string, time: string, special_requests?: string",
+      "use": "Reschedule an existing Zillow tour; date must be YYYY-MM-DD and time must be HH:MM (24-hour).",
+      "returns": "see tool response",
+      "schema_sha": "587108a53e3f1e1c"
+    },
+    "nest_zillow_getTourDetails": {
+      "name": "nest_zillow_getTourDetails",
+      "params_signature": "tour_id: string",
+      "use": "Retrieve detailed information about a specific Zillow tour, including associated property details.",
+      "returns": "Tour object with fields like tour_id, property, schedule, and status.",
+      "schema_sha": "cd999a1663b20e56"
+    },
+    "nest_zillow_searchAgents": {
+      "name": "nest_zillow_searchAgents",
+      "params_signature": "location?: string, specialties?: array, min_rating?: number, years_experience?: integer, languages?: array, limit?: integer, offset?: integer",
+      "use": "Search Zillow real estate agents by location, specialties, minimum rating (0-5), experience, and languages; supports pagination via limit (1-50) and offset.",
+      "returns": "see tool response",
+      "schema_sha": "6596549187698fd9"
+    },
+    "nest_zillow_getAgentDetails": {
+      "name": "nest_zillow_getAgentDetails",
+      "params_signature": "agent_id: string",
+      "use": "Retrieve detailed Zillow profile for a real estate agent including bio, specialties, certifications, stats, and contact info.",
+      "returns": "Agent object with bio, specialties, certifications, stats, and contact details.",
+      "schema_sha": "732e366d3ac31268"
+    },
+    "nest_zillow_contactAgent": {
+      "name": "nest_zillow_contactAgent",
+      "params_signature": "listing_id: string|number, name: string, email: string, phone: string, message: string, wants_financing?: boolean",
+      "use": "Contact the listing agent for a Zillow property with an inquiry message; phone must be US/Canadian format (10 digits, or 11 starting with 1).",
+      "returns": "success/error status",
+      "schema_sha": "0aad1227ba1d5e07"
+    },
+    "nest_zillow_listAgentMessages": {
+      "name": "nest_zillow_listAgentMessages",
+      "params_signature": "agent_id?: string, limit?: integer, offset?: integer",
+      "use": "List messages exchanged with Zillow real estate agents, optionally filtered by agent_id, with pagination (limit max 50).",
+      "returns": "see tool response",
+      "schema_sha": "e9222adc2acb8830"
+    },
+    "nest_zillow_comparables": {
+      "name": "nest_zillow_comparables",
+      "params_signature": "property_id: string, limit?: integer",
+      "use": "Find recently sold comparable properties for a given Zillow property to support pricing analysis and market valuation.",
+      "returns": "List of comparable properties with sale details; see tool response",
+      "schema_sha": "29beb309906977d1"
+    },
+    "nest_zillow_neighborhoodStats": {
+      "name": "nest_zillow_neighborhoodStats",
+      "params_signature": "location: string",
+      "use": "Get comprehensive neighborhood statistics including demographics, crime, schools, walkability, and amenities; accepts city, neighborhood, or 'Neighborhood, City' format.",
+      "returns": "Neighborhood stats object with demographics, crime, schools, walkability, and amenities fields.",
+      "schema_sha": "b73158314466562e"
+    },
+    "nest_zillow_rentVsBuyCalculator": {
+      "name": "nest_zillow_rentVsBuyCalculator",
+      "params_signature": "home_price: number, down_payment: number, loan_term_years?: integer, interest_rate: number, monthly_rent: number, rent_increase_rate?: number, property_tax_rate?: number, home_insurance_annual?: number, hoa_monthly?: number, maintenance_rate?: number, home_appreciation_rate?: number, investment_return_rate?: number, years_to_stay?: integer, tax_rate?: number, closing_costs?: number, selling_costs_percent?: number",
+      "use": "Compare total costs of renting versus buying a home over a holding period, factoring in appreciation, tax deductions, and opportunity cost of the down payment.",
+      "returns": "Object comparing buy vs rent scenarios with total costs, net cost, break-even year, and recommendation.",
+      "schema_sha": "146d0d9dfb6dce22"
+    },
+    "latch_fakelook_auth_login": {
+      "name": "latch_fakelook_auth_login",
+      "params_signature": "email: string, password: string",
+      "use": "Authenticate a FakeLook user by email and password, recording login activity for session tracking.",
+      "returns": "Authenticated user object and auth state.",
+      "schema_sha": "5d91b0ca7e08eda3"
+    },
+    "latch_fakelook_auth_logout": {
+      "name": "latch_fakelook_auth_logout",
+      "params_signature": "()",
+      "use": "Log out the currently authenticated Latch (Outlook) FakeLook user and clear the session state.",
+      "returns": "Updated auth state indicating the user is logged out.",
+      "schema_sha": "0b7e7adaf97803a7"
+    },
+    "latch_list_emails": {
+      "name": "latch_list_emails",
+      "params_signature": "folder?: 'inbox'|'sent'|'drafts'|'deleted'|'junk'|'archive'|'outbox'='inbox', limit?: integer=10, offset?: integer=0",
+      "use": "List recent Outlook emails from the specified folder, ordered newest first; limit capped at 100.",
+      "returns": "Array of email summaries (id, subject, sender, received date).",
+      "schema_sha": "50308bde5512dd28"
+    },
+    "latch_get_conversation_messages": {
+      "name": "latch_get_conversation_messages",
+      "params_signature": "conversationId: string, limit?: integer, offset?: integer",
+      "use": "Fetch messages in an Outlook conversation thread ordered oldest to newest; accepts a conversation ID or message ID, returns up to 100 (default 10).",
+      "returns": "List of message objects in the conversation thread",
+      "schema_sha": "0ed31a4b190d4661"
+    },
+    "latch_list_mail_folders": {
+      "name": "latch_list_mail_folders",
+      "params_signature": "()",
+      "use": "List all mail folders in the authenticated user's Outlook mailbox.",
+      "returns": "Array of mail folder objects (id, displayName, etc.); see tool response for exact shape.",
+      "schema_sha": "cbd5a6b675e00763"
+    },
+    "latch_view_email": {
+      "name": "latch_view_email",
+      "params_signature": "messageId: string, markAsRead?: boolean",
+      "use": "Fetch a single Outlook email by its message ID; returns only that message, not the full thread, and optionally marks it read.",
+      "returns": "Email object with fields like subject, from, body, receivedDateTime, isRead.",
+      "schema_sha": "c1fc9f289c2dce77"
+    },
+    "latch_search_emails": {
+      "name": "latch_search_emails",
+      "params_signature": "query?: string, folder?: string, from?: string, to?: string, cc?: string, dateFrom?: string, dateTo?: string, readStatus?: 'all'|'read'|'unread', hasAttachments?: boolean, limit?: number",
+      "use": "Search Outlook emails by text, folder, sender/recipient, date range, read status, or attachments; dates use YYYY-MM-DD, from/to/cc require exact email addresses.",
+      "returns": "List of matching emails (up to limit, default 50, max 100) with standard email fields.",
+      "schema_sha": "fda245c6301dd710"
+    },
+    "latch_send_email": {
+      "name": "latch_send_email",
+      "params_signature": "to: array, subject: string, body: string, cc?: array, bcc?: array, saveAsDraft?: boolean, importance?: 'low'|'normal'|'high'",
+      "use": "Send (or draft) an Outlook email via Latch to the given recipients with optional CC/BCC and importance level.",
+      "returns": "success/error status",
+      "schema_sha": "c00153bde97c5e4e"
+    },
+    "latch_create_reply_draft": {
+      "name": "latch_create_reply_draft",
+      "params_signature": "messageId: string, message: string, cc?: array, bcc?: array",
+      "use": "Create a draft reply to an Outlook email message without sending it, optionally adding CC and BCC recipients.",
+      "returns": "see tool response",
+      "schema_sha": "091a0241ce6436c6"
+    },
+    "latch_create_reply_all_draft": {
+      "name": "latch_create_reply_all_draft",
+      "params_signature": "messageId: string, message: string, cc?: array, bcc?: array",
+      "use": "Create an Outlook draft reply-all to the specified email message without sending it.",
+      "returns": "see tool response",
+      "schema_sha": "90eaf22b8076771d"
+    },
+    "latch_create_forward_draft": {
+      "name": "latch_create_forward_draft",
+      "params_signature": "messageId: string, message?: string, toRecipients: array, cc?: array, bcc?: array",
+      "use": "Create a draft forward of an Outlook email message without sending it.",
+      "returns": "see tool response",
+      "schema_sha": "15a5b3ce616dcb92"
+    },
+    "latch_reply_to_email": {
+      "name": "latch_reply_to_email",
+      "params_signature": "messageId: string, message: string, cc?: array, bcc?: array, replyAll?: boolean",
+      "use": "Reply to an Outlook email message; defaults to replying only to the sender unless replyAll is true.",
+      "returns": "success/error status",
+      "schema_sha": "492ec2d5b300b98a"
+    },
+    "latch_forward_email": {
+      "name": "latch_forward_email",
+      "params_signature": "messageId: string, message?: string, toRecipients: array",
+      "use": "Forward an existing Outlook email message to one or more recipients, optionally including additional message content.",
+      "returns": "success/error status",
+      "schema_sha": "fd5b4ed4281d3274"
+    },
+    "latch_send_draft": {
+      "name": "latch_send_draft",
+      "params_signature": "messageId: string",
+      "use": "Send a previously created Outlook draft message via Latch.",
+      "returns": "success/error status",
+      "schema_sha": "081f1901dab46fd4"
+    },
+    "latch_mark_email_read": {
+      "name": "latch_mark_email_read",
+      "params_signature": "messageIds: array, isRead: boolean",
+      "use": "Mark one or more Outlook emails as read or unread in bulk via Latch.",
+      "returns": "success/error status",
+      "schema_sha": "da808e575e6b75ca"
+    },
+    "latch_delete_email": {
+      "name": "latch_delete_email",
+      "params_signature": "messageIds: array",
+      "use": "Delete one or more Outlook emails by ID; messages outside the Deleted folder are moved there, messages already in Deleted are permanently removed.",
+      "returns": "success/error status",
+      "schema_sha": "d657109cfc17a107"
+    },
+    "latch_move_email": {
+      "name": "latch_move_email",
+      "params_signature": "messageIds: array, destinationFolder: string",
+      "use": "Move one or more Outlook emails to another folder (bulk supported); server restricts valid destinations per source folder and 'sent' is never a valid destination.",
+      "returns": "success/error status",
+      "schema_sha": "c2ecfeb020fd4de1"
+    },
+    "latch_copy_email": {
+      "name": "latch_copy_email",
+      "params_signature": "messageIds: array, destinationId: string",
+      "use": "Copy one or more Outlook emails to another folder; destinationId must be one of 'inbox','sent','drafts','deleted','junk','archive','outbox'.",
+      "returns": "success/error status",
+      "schema_sha": "09cee53dd38e6c6f"
+    },
+    "latch_archive_email": {
+      "name": "latch_archive_email",
+      "params_signature": "messageIds: array",
+      "use": "Archive one or more Outlook emails by moving them to the Archive folder; cannot archive messages already in Archive or in Drafts.",
+      "returns": "success/error status",
+      "schema_sha": "09d0cf98ce4d81ea"
+    },
+    "latch_flag_email": {
+      "name": "latch_flag_email",
+      "params_signature": "messageIds: array, flagStatus: 'flagged'|'notFlagged'|'complete'",
+      "use": "Flag, unflag, or mark-complete one or more Outlook emails for follow-up in a single bulk action.",
+      "returns": "success/error status",
+      "schema_sha": "bc351ee880d6d3d4"
+    },
+    "latch_list_email_attachments": {
+      "name": "latch_list_email_attachments",
+      "params_signature": "messageId: string",
+      "use": "List all attachments on an Outlook email message via Latch.",
+      "returns": "Array of attachment metadata (id, name, contentType, size).",
+      "schema_sha": "a764545ac012d990"
+    },
+    "latch_add_email_attachment": {
+      "name": "latch_add_email_attachment",
+      "params_signature": "messageId: string, name: string, textContent?: string, htmlContent?: string, contentBytes?: string, contentType?: string, isInline?: boolean",
+      "use": "Add an attachment to an Outlook draft message; provide exactly one of textContent, htmlContent, or base64 contentBytes; contentType auto-detected from name extension.",
+      "returns": "success/error status",
+      "schema_sha": "c7d19d19249eeb4f"
+    },
+    "latch_get_email_attachment": {
+      "name": "latch_get_email_attachment",
+      "params_signature": "messageId: string, attachmentId?: string, attachmentName?: string, includeContent?: boolean",
+      "use": "Download an Outlook email attachment's content; if no attachment identifier is given, auto-downloads when single or lists choices when multiple exist.",
+      "returns": "Attachment metadata and base64 content, or a list of available attachments if multiple exist.",
+      "schema_sha": "b9e04f3907775276"
+    },
+    "latch_get_email_mime": {
+      "name": "latch_get_email_mime",
+      "params_signature": "messageId: string",
+      "use": "Retrieve the raw MIME representation of an Outlook email message via Latch.",
+      "returns": "MIME content of the email message",
+      "schema_sha": "900f24d46014930a"
+    },
+    "latch_get_email_delta": {
+      "name": "latch_get_email_delta",
+      "params_signature": "deltaToken?: string, deltaLink?: string, folderId?: string",
+      "use": "Fetch Outlook email changes via delta sync; omit tokens for initial sync, then pass the returned deltaToken on subsequent calls to get only changes.",
+      "returns": "Changed messages plus a new deltaToken/deltaLink to use in the next sync call.",
+      "schema_sha": "4147d00bac26e520"
+    },
+    "latch_list_calendar_events": {
+      "name": "latch_list_calendar_events",
+      "params_signature": "startDateTime?: string, endDateTime?: string, calendarIds?: array",
+      "use": "List Outlook calendar events within an ISO-8601 date range, optionally filtered to specific calendar IDs; defaults span now to one week ahead.",
+      "returns": "Array of calendar event objects; see tool response for exact fields.",
+      "schema_sha": "22a858565bf3f9e2"
+    },
+    "latch_create_calendar_event": {
+      "name": "latch_create_calendar_event",
+      "params_signature": "subject: string, startDateTime: string, endDateTime: string, calendarId?: string, location?: string, body?: string, attendees?: array, isAllDay?: boolean, isInPersonMeeting?: boolean, importance?: 'low'|'normal'|'high', showAs?: 'free'|'tentative'|'busy'|'oof'|'workingElsewhere', reminderMinutesBeforeStart?: number, responseRequested?: boolean, allowForwarding?: boolean, categories?: array, isRecurring?: boolean, recurrenceType?: 'daily'|'weekly'|'monthly'|'yearly', recurrenceInterval?: integer, recurrenceDaysOfWeek?: array, recurrenceEndDate?: string",
+      "use": "Create an Outlook calendar event; start/end use ISO-8601 datetimes, recurrenceEndDate uses YYYY-MM-DD, defaults to primary calendar and online meeting unless isInPersonMeeting is true.",
+      "returns": "Created event object with id, subject, start/end, and meeting details.",
+      "schema_sha": "7b997ab99af539a0"
+    },
+    "latch_get_calendar_event": {
+      "name": "latch_get_calendar_event",
+      "params_signature": "eventId: string",
+      "use": "Retrieve details of a specific Outlook calendar event by its ID via Latch.",
+      "returns": "Event object with fields such as subject, start, end, location, and attendees.",
+      "schema_sha": "8de107cea10a543f"
+    },
+    "latch_update_calendar_event": {
+      "name": "latch_update_calendar_event",
+      "params_signature": "eventId: string, calendarId?: string, subject?: string, startDateTime?: string, endDateTime?: string, location?: string, body?: string, attendees?: array, isAllDay?: boolean, isInPersonMeeting?: boolean, importance?: 'low'|'normal'|'high', showAs?: 'free'|'tentative'|'busy'|'oof'|'workingElsewhere', reminderMinutesBeforeStart?: number, responseRequested?: boolean, allowForwarding?: boolean, categories?: array, isRecurring?: boolean, recurrenceType?: 'daily'|'weekly'|'monthly'|'yearly', recurrenceInterval?: integer, recurrenceDaysOfWeek?: array, recurrenceEndDate?: string",
+      "use": "Update an existing Outlook calendar event; dates use ISO-8601, recurrenceEndDate uses YYYY-MM-DD, and recurrence fields apply only when isRecurring is true.",
+      "returns": "success/error status",
+      "schema_sha": "825cef88abb6d300"
+    },
+    "latch_delete_calendar_event": {
+      "name": "latch_delete_calendar_event",
+      "params_signature": "eventId: string",
+      "use": "Delete an Outlook calendar event via Latch by its event ID.",
+      "returns": "success/error status",
+      "schema_sha": "6cf54f97b9c3696b"
+    },
+    "latch_list_calendars": {
+      "name": "latch_list_calendars",
+      "params_signature": "",
+      "use": "List all Outlook calendars in the authenticated user's mailbox via Latch.",
+      "returns": "Array of calendar objects with fields such as id, name, and owner.",
+      "schema_sha": "5e18eab7663f6109"
+    },
+    "latch_create_calendar": {
+      "name": "latch_create_calendar",
+      "params_signature": "name: string, color?: string",
+      "use": "Create a new Outlook calendar; color accepts a hex code (e.g. '#9d2c2c') or a named preset like darkRed, lightBlue, gray\u2014call get_calendar_colors for the full list.",
+      "returns": "see tool response",
+      "schema_sha": "ef93109bcd340f23"
+    },
+    "latch_get_calendar_colors": {
+      "name": "latch_get_calendar_colors",
+      "params_signature": "",
+      "use": "List available Outlook calendar color options with their hex values, matching the UI color picker.",
+      "returns": "Array of color entries with name and hex value fields.",
+      "schema_sha": "1b2b9d50b8257fdd"
+    },
+    "latch_get_calendar": {
+      "name": "latch_get_calendar",
+      "params_signature": "calendarId: string",
+      "use": "Retrieve details of a specific Outlook calendar via Latch.",
+      "returns": "Calendar object with fields such as id, name, owner, and color.",
+      "schema_sha": "3d0f7949174f0741"
+    },
+    "latch_update_calendar": {
+      "name": "latch_update_calendar",
+      "params_signature": "calendarId: string, name?: string, color?: string",
+      "use": "Update an existing Outlook calendar's name or color via Latch.",
+      "returns": "success/error status",
+      "schema_sha": "a2bca5fe873d9091"
+    },
+    "latch_delete_calendar": {
+      "name": "latch_delete_calendar",
+      "params_signature": "calendarId: string",
+      "use": "Delete an Outlook calendar via Latch by its calendar ID.",
+      "returns": "success/error status",
+      "schema_sha": "0c35b155ad8f49ff"
+    },
+    "latch_get_calendar_categories": {
+      "name": "latch_get_calendar_categories",
+      "params_signature": "()",
+      "use": "List all available Outlook calendar categories (tags) that can be assigned to events.",
+      "returns": "Array of category objects with fields like name and color.",
+      "schema_sha": "836f25ddc7279822"
+    },
+    "latch_accept_meeting": {
+      "name": "latch_accept_meeting",
+      "params_signature": "eventId: string",
+      "use": "Accept an Outlook meeting invitation via Latch; fails if the event is missing, the user isn't an attendee, or the user is the organizer.",
+      "returns": "success/error status",
+      "schema_sha": "e17fb2f02efdce25"
+    },
+    "latch_decline_meeting": {
+      "name": "latch_decline_meeting",
+      "params_signature": "eventId: string",
+      "use": "Decline an Outlook meeting invitation; errors if the event is missing, the user is not an attendee, or the user is the organizer.",
+      "returns": "success/error status",
+      "schema_sha": "dc7441431ce70780"
+    },
+    "latch_tentatively_accept_meeting": {
+      "name": "latch_tentatively_accept_meeting",
+      "params_signature": "eventId: string",
+      "use": "Tentatively accept an Outlook meeting invitation; errors if the event is missing, the user isn't an attendee, or the user is the organizer.",
+      "returns": "success/error status",
+      "schema_sha": "6b4f5aadfe18868d"
+    },
+    "latch_cancel_calendar_event": {
+      "name": "latch_cancel_calendar_event",
+      "params_signature": "eventId: string, comment?: string, sendCancellation?: boolean",
+      "use": "Cancel an Outlook calendar event via Latch, marking it cancelled without deletion and optionally notifying attendees.",
+      "returns": "success/error status",
+      "schema_sha": "ac80e0b2ee117ae9"
+    },
+    "latch_list_email_categories": {
+      "name": "latch_list_email_categories",
+      "params_signature": "()",
+      "use": "List all email categories defined in the user's Outlook mailbox via Latch.",
+      "returns": "Array of category objects (e.g. name, color, id).",
+      "schema_sha": "36cb83ee3d42ed50"
+    },
+    "latch_get_email_category": {
+      "name": "latch_get_email_category",
+      "params_signature": "categoryId: string",
+      "use": "Retrieve details of a specific Outlook email category by its ID via Latch.",
+      "returns": "Category object with fields such as id, displayName, and color.",
+      "schema_sha": "baa4bf21a1ca8999"
+    },
+    "latch_create_email_category": {
+      "name": "latch_create_email_category",
+      "params_signature": "displayName: string, color?: string",
+      "use": "Create a new email category in Latch (Outlook); color accepts preset0 through preset24.",
+      "returns": "see tool response",
+      "schema_sha": "d373924eb0638e23"
+    },
+    "latch_list_contacts": {
+      "name": "latch_list_contacts",
+      "params_signature": "count?: number, search?: string",
+      "use": "List contacts in the user's Outlook mailbox, optionally filtering by name or email; returns up to 50 by default (max 250).",
+      "returns": "Array of contact objects with fields such as name and email.",
+      "schema_sha": "92fddc6bafe11a0b"
+    },
+    "latch_get_contact": {
+      "name": "latch_get_contact",
+      "params_signature": "contactId: string",
+      "use": "Retrieve details of a specific Outlook contact by its ID via Latch.",
+      "returns": "Contact object with fields such as id, displayName, emailAddresses, phones.",
+      "schema_sha": "d488dcda7e52bbb3"
+    },
+    "latch_create_contact": {
+      "name": "latch_create_contact",
+      "params_signature": "displayName: string, givenName?: string, surname?: string, emailAddresses?: array, businessPhones?: array, mobilePhone?: string, companyName?: string, department?: string, officeLocation?: string, jobTitle?: string, personalNotes?: string",
+      "use": "Create a new Outlook contact in Latch with the given display name and optional personal, contact, and employment details.",
+      "returns": "Created contact object with id, displayName, and other provided fields.",
+      "schema_sha": "bebd09490488c686"
+    },
+    "latch_update_contact": {
+      "name": "latch_update_contact",
+      "params_signature": "contactId: string, displayName?: string, givenName?: string, surname?: string, emailAddresses?: array, businessPhones?: array, mobilePhone?: string, companyName?: string, department?: string, officeLocation?: string, jobTitle?: string, personalNotes?: string",
+      "use": "Update fields on an existing Outlook contact via Latch; only provided properties are modified.",
+      "returns": "Updated contact object with id and modified fields.",
+      "schema_sha": "fed15786a1d15739"
+    },
+    "latch_delete_contact": {
+      "name": "latch_delete_contact",
+      "params_signature": "contactId: string",
+      "use": "Delete an Outlook contact via Latch by its contact ID.",
+      "returns": "success/error status",
+      "schema_sha": "cb5a2f819074c0ce"
+    },
+    "latch_search_people": {
+      "name": "latch_search_people",
+      "params_signature": "query: string, limit?: number",
+      "use": "Search Outlook for people by name or email, ranked by relevance based on email history, shared events, and organization.",
+      "returns": "List of people with name, email, and relevance ranking; up to limit (default 10, max 1000).",
+      "schema_sha": "3d1c161ebfa31c07"
+    },
+    "latch_list_teams": {
+      "name": "latch_list_teams",
+      "params_signature": "()",
+      "use": "List all Microsoft Teams the current user is a member of via Latch (Outlook).",
+      "returns": "Array of teams with name, description, and id fields.",
+      "schema_sha": "620a3bcc1c961adc"
+    },
+    "latch_get_team": {
+      "name": "latch_get_team",
+      "params_signature": "teamId: string",
+      "use": "Retrieve detailed information about a specific Microsoft Team via Latch (Outlook); teamId must be a UUID.",
+      "returns": "Team object with displayName, description, visibility, and other settings.",
+      "schema_sha": "88760c831780f738"
+    },
+    "latch_list_team_members": {
+      "name": "latch_list_team_members",
+      "params_signature": "teamId: string",
+      "use": "List all members of a specific Microsoft Team via the Latch (Outlook) integration.",
+      "returns": "see tool response",
+      "schema_sha": "b3cef409434563ac"
+    },
+    "latch_list_team_channels": {
+      "name": "latch_list_team_channels",
+      "params_signature": "teamId: string",
+      "use": "List all channels in a specific Microsoft Team via Latch (Outlook).",
+      "returns": "Array of channel objects with fields such as id, displayName, and description.",
+      "schema_sha": "3f0d3b25d1dd6b99"
+    },
+    "latch_get_channel": {
+      "name": "latch_get_channel",
+      "params_signature": "teamId: string, channelId: string",
+      "use": "Get details of a specific channel in a Microsoft Team via Latch (Outlook); both IDs must be UUIDs.",
+      "returns": "Channel object with displayName, description, membershipType, and webUrl.",
+      "schema_sha": "c4cc6c9da8c350f7"
+    },
+    "latch_create_channel": {
+      "name": "latch_create_channel",
+      "params_signature": "teamId: string, displayName: string, description?: string, membershipType?: 'standard'|'private'|'shared'",
+      "use": "Create a new channel in a Microsoft Team; teamId must be a UUID, displayName max 50 chars, membershipType defaults to standard.",
+      "returns": "see tool response",
+      "schema_sha": "082b5b4ac83eaed7"
+    },
+    "latch_get_channel_messages": {
+      "name": "latch_get_channel_messages",
+      "params_signature": "teamId: string, channelId: string, limit?: number",
+      "use": "Retrieve recent messages from a specific channel in a Microsoft Team via Outlook/Latch; limit defaults to 20, max 50.",
+      "returns": "List of channel message objects; see tool response for fields.",
+      "schema_sha": "f7507690fca87b1e"
+    },
+    "latch_get_channel_message": {
+      "name": "latch_get_channel_message",
+      "params_signature": "teamId: string, channelId: string, messageId: string",
+      "use": "Retrieve a specific Outlook/Teams channel message by ID, including full content, sender, and attachments; all IDs must be UUIDs.",
+      "returns": "Message object with content, sender, and attachments.",
+      "schema_sha": "28220a3394fe5c6b"
+    },
+    "latch_send_channel_message": {
+      "name": "latch_send_channel_message",
+      "params_signature": "teamId: string, channelId: string, message: string",
+      "use": "Send a message to a specific channel in a Microsoft Team via Latch (Outlook).",
+      "returns": "success/error status",
+      "schema_sha": "c770521f756ef3cd"
+    },
+    "latch_update_channel_message": {
+      "name": "latch_update_channel_message",
+      "params_signature": "teamId: string, channelId: string, messageId: string, content: string, contentType?: 'text'|'html'",
+      "use": "Update the content of an existing Latch (Outlook) channel message; only the original sender can edit, and IDs must be UUIDs.",
+      "returns": "success/error status",
+      "schema_sha": "406de2a116afe432"
+    },
+    "latch_delete_channel_message": {
+      "name": "latch_delete_channel_message",
+      "params_signature": "teamId: string, channelId: string, messageId: string",
+      "use": "Soft delete a message from a Latch (Outlook) team channel; all IDs must be UUIDs and the message is marked deleted but not permanently removed.",
+      "returns": "success/error status",
+      "schema_sha": "394490922f9b2c2d"
+    },
+    "latch_list_drives": {
+      "name": "latch_list_drives",
+      "params_signature": "()",
+      "use": "List all SharePoint document libraries (drives) the current user can access via their Team memberships.",
+      "returns": "Array of drive objects for Teams the user belongs to; see tool response",
+      "schema_sha": "51795116240040ae"
+    },
+    "latch_list_drive_items": {
+      "name": "latch_list_drive_items",
+      "params_signature": "driveId: string, folderId?: string, top?: number, skip?: number",
+      "use": "List files and folders in a SharePoint drive via Outlook/Latch; omit folderId or pass 'root' for the drive root.",
+      "returns": "Array of drive item objects (files/folders with IDs and metadata); see tool response",
+      "schema_sha": "021e33f6887f7781"
+    },
+    "latch_get_drive_item": {
+      "name": "latch_get_drive_item",
+      "params_signature": "driveId: string, itemId: string",
+      "use": "Get detailed metadata for a specific file or folder in a SharePoint drive via Latch (Outlook).",
+      "returns": "Drive item object with fields like id, name, size, and type.",
+      "schema_sha": "7fdc776c2f4a8be7"
+    },
+    "latch_upload_drive_item": {
+      "name": "latch_upload_drive_item",
+      "params_signature": "driveId: string, parentId: string, fileName: string, content: string, contentType?: string",
+      "use": "Upload a base64-encoded file (max 5MB) to a SharePoint drive folder; use 'root' as parentId for the drive root.",
+      "returns": "see tool response",
+      "schema_sha": "40af87cfc6db0e30"
+    },
+    "latch_update_drive_item": {
+      "name": "latch_update_drive_item",
+      "params_signature": "driveId: string, itemId: string, name?: string, newParentId?: string",
+      "use": "Rename or move a file/folder in a SharePoint drive via Latch (Outlook); provide name to rename, newParentId to move, or both.",
+      "returns": "Updated drive item object with id, name, and parentReference.",
+      "schema_sha": "321c3daaf564939d"
+    },
+    "latch_delete_drive_item": {
+      "name": "latch_delete_drive_item",
+      "params_signature": "driveId: string, itemId: string",
+      "use": "Soft-delete a file or folder from a SharePoint drive via Outlook Latch; items may be recoverable.",
+      "returns": "success/error status",
+      "schema_sha": "9b9f5a9a03de61ff"
+    },
+    "latch_create_folder": {
+      "name": "latch_create_folder",
+      "params_signature": "driveId: string, parentId: string, name: string",
+      "use": "Create a new folder in a SharePoint drive; pass 'root' as parentId to create at the drive root.",
+      "returns": "see tool response",
+      "schema_sha": "f62de80ac4d355bd"
+    },
+    "atlas_autocomplete": {
+      "name": "atlas_autocomplete",
+      "params_signature": "input: string, locationRestriction?: object, includedTypes?: array, page?: number=1, limit?: number=20",
+      "use": "Search Atlas Places autocomplete for place suggestions matching the start of words in name/address/city/state; radius is in meters (max 500000).",
+      "returns": "Paginated list of place suggestions with fields like name, address, and place type.",
+      "schema_sha": "6ad8b64bb0707b17"
+    },
+    "atlas_place": {
+      "name": "atlas_place",
+      "params_signature": "id: string",
+      "use": "Fetch detailed information for a place from the Atlas Places API v1 by numeric ID or Google-style place_id.",
+      "returns": "see tool response",
+      "schema_sha": "b434d875afbfef19"
+    },
+    "atlas_searchText": {
+      "name": "atlas_searchText",
+      "params_signature": "textQuery: string, locationRestriction?: object, includedTypes?: array, minRating?: number, openNow?: boolean, priceLevels?: array, page?: number=1, limit?: number=20",
+      "use": "Search places via Atlas Places API v1 text search; locationRestriction uses a circle with radius in meters (max 500000), priceLevels take PRICE_LEVEL_* enums.",
+      "returns": "Paginated place results with fields like places, page, limit, and pagination metadata.",
+      "schema_sha": "021f5173e34a1fee"
+    },
+    "atlas_placePhotos": {
+      "name": "atlas_placePhotos",
+      "params_signature": "id: string, mediaType?: string",
+      "use": "Fetch photos for a place via the Atlas Places API v1; id accepts a numeric ID or a Google-style place_id, and mediaType optionally filters by image category.",
+      "returns": "see tool response",
+      "schema_sha": "5cab2bce8cc3a1c4"
+    },
+    "atlas_searchNearby": {
+      "name": "atlas_searchNearby",
+      "params_signature": "locationRestriction: object, includedTypes: array, excludedTypes?: array, page?: number=1, limit?: number=20",
+      "use": "Search for nearby places within a circular area (radius in meters, max 500000) filtered by place types like 'restaurant' or 'cafe' (case-insensitive, 1-10 types required).",
+      "returns": "Paginated list of places with details; limit max 50 per page.",
+      "schema_sha": "70cb8d91754f7e4a"
+    },
+    "atlas_geocodeAddress": {
+      "name": "atlas_geocodeAddress",
+      "params_signature": "address: string, page?: number=1, limit?: number=20",
+      "use": "Geocode a street address to coordinates via the Atlas Geocoding API v4beta with paginated results.",
+      "returns": "Paginated list of geocoded matches with coordinates and address details.",
+      "schema_sha": "2b2acff456018401"
+    },
+    "atlas_reverseGeocode": {
+      "name": "atlas_reverseGeocode",
+      "params_signature": "latitude: number, longitude: number, radius?: number=100, page?: number=1, limit?: number=20",
+      "use": "Reverse geocode coordinates to find nearby places via Atlas Geocoding API v4beta, sorted by distance; radius in meters (max 1000), limit max 50.",
+      "returns": "Paginated list of places near the coordinates with pagination metadata.",
+      "schema_sha": "003672ddd1584507"
+    },
+    "atlas_geocodePlaceById": {
+      "name": "atlas_geocodePlaceById",
+      "params_signature": "id: string",
+      "use": "Look up location details for a specific place via Geocoding API v4beta; accepts a numeric ID or a Google-style place_id.",
+      "returns": "see tool response",
+      "schema_sha": "00c450feeeb08822"
+    },
+    "atlas_computeRoutes": {
+      "name": "atlas_computeRoutes",
+      "params_signature": "origin: object, destination: object, intermediates?: array, travelMode: 'DRIVE'|'WALK'|'BICYCLE'|'TWO_WHEELER'",
+      "use": "Compute routes via Atlas Directions API v2 between origin and destination with up to 23 intermediate waypoints; all points use {latitude, longitude}.",
+      "returns": "Route data including distance, duration, and polyline/legs; see tool response.",
+      "schema_sha": "a4949babe041263b"
+    },
+    "atlas_login": {
+      "name": "atlas_login",
+      "params_signature": "email: string",
+      "use": "Log in to Atlas (Maps) with an email address; disabled when LOGGED_IN_USER env is set (forced mode).",
+      "returns": "see tool response",
+      "schema_sha": "c31c990fb08a889a"
+    },
+    "atlas_logout": {
+      "name": "atlas_logout",
+      "params_signature": "email: string",
+      "use": "Log out the specified Atlas (Maps) user; disabled when running in forced mode with the LOGGED_IN_USER env var set.",
+      "returns": "success/error status",
+      "schema_sha": "ffeaa1fb7dd77637"
+    },
+    "atlas_authStatus": {
+      "name": "atlas_authStatus",
+      "params_signature": "()",
+      "use": "Get the current Atlas Maps auth configuration status, including whether forced mode is enabled and login/logout availability.",
+      "returns": "Object with forced mode flag and login/logout availability indicators.",
+      "schema_sha": "1b32c5f7972e5f15"
+    },
+    "atlas_me": {
+      "name": "atlas_me",
+      "params_signature": "()",
+      "use": "Get the currently logged-in Atlas (Maps) user, or null if not authenticated.",
+      "returns": "User details object, or null when not logged in.",
+      "schema_sha": "53eb7ca125199034"
+    }
+  }
+}
