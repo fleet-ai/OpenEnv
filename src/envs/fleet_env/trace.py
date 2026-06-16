@@ -2,12 +2,46 @@
 
 Provides functions to create trace jobs and upload conversation traces
 to the Fleet API for viewing in the Fleet UI (including screenshots).
+
+The Fleet trace API lives on the internal platform host, NOT the env
+orchestrator. The previous implementation pointed at
+`orchestrator.fleetai.com` (which is where the env-instance API lives) and
+authenticated with `X-API-Key` — both wrong, so every trace upload silently
+404'd. Verified by hand against the live OpenAPI spec on 2026-06-16:
+
+  POST https://api.internal.fleet-platform.fleetai.com/v1/traces/jobs
+       Authorization: Bearer <api_key>
+       body: {"name": "<job_name>"}
+       returns: {"job_id": "...", "name": "...", "status": "completed"}
+
+  POST https://api.internal.fleet-platform.fleetai.com/v1/traces/logs
+       Authorization: Bearer <api_key>
+       body: {
+         "history": [
+           {"role": "user", "parts": [{"type": "text", "text": "..."}]},
+           {"role": "assistant", "parts": [{"type": "text", "text": "..."}]},
+           ...
+         ],
+         "job_id": "<from /v1/traces/jobs>",
+         "task_key": "...",
+         "model": "...",
+         "score": <float>,
+         "instance_id": "<optional>",
+         "metadata": {...},
+       }
+       returns: {"success": true, "session_id": "...", ...}
+
+The body shape for /v1/traces/logs uses `history` (not `messages`) with each
+message holding a `parts` array of typed blocks (not a `content` string).
 """
 
 import logging
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+# Fleet trace API host (NOT the env orchestrator).
+_FLEET_TRACE_HOST = "https://api.internal.fleet-platform.fleetai.com"
 
 
 def _convert_image_block(block: Dict[str, Any]) -> Dict[str, Any]:
@@ -43,17 +77,30 @@ def _convert_content(content: Any) -> Any:
 async def create_trace_job(api_key: str, name: str) -> str:
     """Create a Fleet trace job for grouping eval traces.
 
+    Hits the trace host directly with Bearer auth. The Fleet SDK's
+    `AsyncFleet.trace_job` points at the env orchestrator with `X-API-Key`
+    which returns 404; that's why every prior caller was silently failing.
+
     Args:
         api_key: Fleet API key.
         name: Name for the trace job (e.g. "run_name_step_100").
 
     Returns:
         The job_id string.
-    """
-    from fleet._async import AsyncFleet
 
-    fleet = AsyncFleet(api_key=api_key)
-    return await fleet.trace_job(name=name)
+    Raises:
+        httpx.HTTPStatusError on non-2xx; callers should wrap in try/except.
+    """
+    import httpx
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(
+            f"{_FLEET_TRACE_HOST}/v1/traces/jobs",
+            json={"name": name},
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+        resp.raise_for_status()
+        return resp.json()["job_id"]
 
 
 async def upload_trace(
@@ -88,15 +135,34 @@ async def upload_trace(
     try:
         import httpx
 
-        # Convert chat_history to ingest message format.
-        # Fleet ingest API expects image blocks as: {"type": "image", "mime_type": ..., "data": ...}
-        messages = [
-            {"role": msg["role"], "content": _convert_content(msg.get("content"))}
-            for msg in chat_history
-        ]
+        # Fleet /v1/traces/logs expects each history entry as
+        #   {"role": "...", "parts": [{"type": "text"|"image", ...}, ...]}
+        # The legacy `messages`/`content` shape was the wrong endpoint's
+        # contract. Image entries are emitted as
+        #   {"type": "image", "mime_type": "...", "data": "<base64>"}
+        # so the UI can render screenshots inline.
+        history = []
+        for msg in chat_history:
+            converted = _convert_content(msg.get("content"))
+            if isinstance(converted, list):
+                parts = []
+                for block in converted:
+                    if isinstance(block, dict):
+                        if block.get("type") == "image":
+                            parts.append(block)
+                        elif block.get("type") == "text":
+                            parts.append({"type": "text", "text": block.get("text", "")})
+                        else:
+                            # Unknown block — flatten to text so the trace still uploads.
+                            parts.append({"type": "text", "text": str(block)})
+                    else:
+                        parts.append({"type": "text", "text": str(block)})
+            else:
+                parts = [{"type": "text", "text": str(converted) if converted is not None else ""}]
+            history.append({"role": msg.get("role", "user"), "parts": parts})
 
         payload: Dict[str, Any] = {
-            "messages": messages,
+            "history": history,
             "job_id": job_id,
             "task_key": task_key,
             "model": model,
@@ -109,7 +175,7 @@ async def upload_trace(
 
         async with httpx.AsyncClient(timeout=60) as client:
             response = await client.post(
-                "https://orchestrator.fleetai.com/v1/sessions/ingest",
+                f"{_FLEET_TRACE_HOST}/v1/traces/logs",
                 json=payload,
                 headers={"Authorization": f"Bearer {api_key}"},
             )
