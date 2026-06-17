@@ -17,6 +17,11 @@ from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
+# Retry the verifier when the env-instance reverse proxy returns 502/503 on a
+# fresh instance. 3 attempts with exponential backoff (3s, 6s) covers the warmup.
+_VERIFY_MAX_ATTEMPTS = 3
+_VERIFY_BACKOFF_S = 3.0
+
 from .client import FleetEnvClient
 from .mcp_tools import FleetMCPTools
 from .telemetry import (
@@ -700,10 +705,14 @@ class FleetTaskEnv:
                 failure_reason = "no_fleet_env"
             else:
                 try:
-                    # Use Fleet SDK's Task.verify_detailed() for proper verifier execution
-                    from fleet.tasks import Task as FleetTask
+                    # Use the async Task so verify_detailed_async() awaits the
+                    # SDK's coroutine in our event loop. The sync Task path
+                    # spins up its own loop via asyncio.run() inside a thread,
+                    # which collides with Event objects bound to the main loop
+                    # ("bound to a different event loop") — that exception was
+                    # the original cause of all uploads sending no exec_id.
+                    from fleet._async.tasks import Task as FleetTask
 
-                    # Create a Fleet SDK Task object with the verifier
                     fleet_task = FleetTask(
                         key=self.task_key,
                         prompt=self.prompt,
@@ -711,16 +720,34 @@ class FleetTaskEnv:
                         verifier_func=verifier_code,
                     )
 
-                    # Execute verifier in a thread to avoid blocking the event loop.
-                    # verify_detailed() does sync HTTP calls internally.
-                    # Pass final_answer when model used submit_final_answer,
-                    # mirroring how the harness routes the answer to the verifier.
+                    # Pass final_answer when model used submit_final_answer.
+                    # We intentionally do NOT pass `conversation` — verifiers
+                    # that fall back to the last assistant msg would grade tool
+                    # calls as "answers". Model must submit explicitly.
                     verify_kwargs = {}
                     if self._submitted_answer is not None:
                         verify_kwargs["final_answer"] = self._submitted_answer
-                    response = await asyncio.to_thread(
-                        fleet_task.verify_detailed, fleet_env, **verify_kwargs
-                    )
+
+                    # Retry on transient env-instance reverse-proxy errors
+                    # (502/503 on a fresh instance before it has fully warmed
+                    # up). Without this, the first verifier call after spawn
+                    # fails silently and the rollout uploads with no exec_id.
+                    response = None
+                    for attempt in range(_VERIFY_MAX_ATTEMPTS):
+                        response = await fleet_task.verify_detailed_async(fleet_env, **verify_kwargs)
+                        err_msg = (response.error or {}).get("message", "") if response.error else ""
+                        is_transient = (
+                            not response.success
+                            and ("502" in err_msg or "503" in err_msg or "Bad Gateway" in err_msg or "timeout" in err_msg.lower())
+                        )
+                        if not is_transient:
+                            break
+                        if attempt < _VERIFY_MAX_ATTEMPTS - 1:
+                            backoff = _VERIFY_BACKOFF_S * (2 ** attempt)
+                            logger.warning(
+                                f"Task {self.task_key}: verifier transient error (attempt {attempt + 1}/{_VERIFY_MAX_ATTEMPTS}): {err_msg[:200]}. Retrying in {backoff}s..."
+                            )
+                            await asyncio.sleep(backoff)
 
                     # Extract result from response
                     # response.success is bool, response.result is the verifier's return value (0.0 or 1.0)
@@ -741,6 +768,10 @@ class FleetTaskEnv:
                     self._last_verifier_execution_id = getattr(
                         response, "execution_id", None
                     )
+                    if not self._last_verifier_execution_id:
+                        logger.warning(
+                            f"Task {self.task_key}: verifier returned no execution_id (success={response.success}, error={response.error}); trace upload will not link to grading"
+                        )
 
                     # Capture verifier feedback for hint generation
                     if hasattr(response, "stdout") and response.stdout:
