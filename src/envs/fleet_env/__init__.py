@@ -1,0 +1,35 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+# All rights reserved.
+#
+# This source code is licensed under the BSD-style license found in the
+# LICENSE file in the root directory of this source tree.
+
+"""Fleet Environment - client-side adapter for Fleet-hosted MCP environments."""
+
+from .client import FleetEnvClient
+from .context_manager import CONTEXT_TOOLS, CONTEXT_TOOL_NAMES, ContextManager
+from .mcp_tools import FleetMCPTools
+from .models import CallToolAction, ListToolsAction
+from .task_env import FleetTaskEnv, make_fleet_task_env
+from .telemetry import configure_fleet_telemetry, set_task_context, clear_task_context
+from .trace import create_trace_job, upload_trace
+from .task_evaluator import TaskEvaluator, evaluate_task
+
+__all__ = [
+    "FleetEnvClient",
+    "FleetMCPTools",
+    "ListToolsAction",
+    "CallToolAction",
+    "FleetTaskEnv",
+    "make_fleet_task_env",
+    "TaskEvaluator",
+    "evaluate_task",
+    "ContextManager",
+    "CONTEXT_TOOLS",
+    "CONTEXT_TOOL_NAMES",
+    "configure_fleet_telemetry",
+    "set_task_context",
+    "clear_task_context",
+    "create_trace_job",
+    "upload_trace",
+]
