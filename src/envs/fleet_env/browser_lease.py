@@ -3,7 +3,8 @@
 Creates isolated browser instances that navigate to Fleet environment web UIs,
 enabling VL models to interact via screenshots + click/type instead of API tools.
 
-No dependency on theseus — uses direct HTTP calls to the browser lease API.
+Uses the central Fleet browser API (api.internal.fleet-platform.fleetai.com)
+which auto-resolves to the best available cluster.
 """
 
 from __future__ import annotations
@@ -20,6 +21,8 @@ import httpx
 from .fleet_mcp_client import FleetMCPClient
 
 logger = logging.getLogger(__name__)
+
+_BROWSER_API_URL = "https://api.internal.fleet-platform.fleetai.com"
 
 # Additional hosts the browser is allowed to reach (tile servers, telemetry, etc.)
 _ADDITIONAL_ALLOWED_HOSTS = (
@@ -45,53 +48,17 @@ class BrowserLeaseResult:
     cdp_url: str
     stream_url: Optional[str]
     host_domain: str
-    cluster_name: str
 
 
-def extract_cluster_name(root_url: str) -> str:
-    """Extract cluster name from Fleet env root URL.
-
-    URL format: https://{instance}.env.{cluster_name}.fleetai.com/
-    """
-    hostname = urlparse(root_url).hostname or ""
-    # Split: ['inst-xxx', 'env', 'fleet-prod-fow-us-east-1', 'fleetai', 'com']
-    parts = hostname.split(".")
-    try:
-        env_idx = parts.index("env")
-        # cluster_name is everything between 'env' and 'fleetai'
-        fleetai_idx = parts.index("fleetai")
-        cluster = ".".join(parts[env_idx + 1 : fleetai_idx])
-        if cluster:
-            return cluster
-    except ValueError:
-        pass
-    raise ValueError(
-        f"Cannot extract cluster_name from URL: {root_url}. "
-        f"Expected format: https://{{instance}}.env.{{cluster}}.fleetai.com/"
-    )
-
-
-def _browser_api_base_url(cluster_name: str) -> str:
-    override = os.getenv("BROWSER_API_BASE_URL", "").strip()
-    if override:
-        parsed = urlparse(override)
-        if parsed.hostname and parsed.hostname.startswith("api.browser."):
-            suffix = parsed.hostname[len("api.browser."):]
-            _, sep, domain = suffix.partition(".")
-            if sep and domain:
-                return f"{parsed.scheme}://api.browser.{cluster_name}.{domain}"
-    return f"https://api.browser.{cluster_name}.fleetai.com"
-
-
-_BROWSER_API_TOKEN_FALLBACK = "bb46d985-763a-47bf-a67a-c2c98ba6e1d9"
-
-
-def _resolve_token() -> str:
-    for var in ("BROWSER_API_TOKEN", "DRIVER_API_TOKEN"):
+def _resolve_api_key() -> str:
+    """Resolve browser API key from environment."""
+    for var in ("FLEET_TEAM_API_KEY", "BROWSER_API_TOKEN", "FLEET_API_KEY"):
         val = os.getenv(var, "").strip()
         if val:
             return val
-    return _BROWSER_API_TOKEN_FALLBACK
+    raise RuntimeError(
+        "No browser API key found. Set FLEET_TEAM_API_KEY, BROWSER_API_TOKEN, or FLEET_API_KEY."
+    )
 
 
 def _allowed_hosts(instance_host: str) -> list[str]:
@@ -100,7 +67,6 @@ def _allowed_hosts(instance_host: str) -> list[str]:
 
 
 async def create_browser_lease(
-    cluster_name: str,
     instance_url: str,
     ttl_seconds: int,
 ) -> BrowserLeaseResult:
@@ -109,23 +75,17 @@ async def create_browser_lease(
     if not instance_host:
         raise RuntimeError(f"No hostname in instance URL: {instance_url}")
 
-    base_url = _browser_api_base_url(cluster_name)
-    token = _resolve_token()
+    api_url = os.getenv("BROWSER_API_BASE_URL", _BROWSER_API_URL).strip()
+    api_key = _resolve_api_key()
     allowed = _allowed_hosts(instance_host)
 
-    logger.info(
-        f"Creating browser lease: cluster={cluster_name}, "
-        f"instance={instance_host}, ttl={ttl_seconds}s"
-    )
+    logger.info(f"Creating browser lease: instance={instance_host}, ttl={ttl_seconds}s")
 
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with httpx.AsyncClient(timeout=60) as client:
         resp = await client.post(
-            f"{base_url}/v1/browsers/lease",
-            json={
-                "ttl_seconds": ttl_seconds,
-                "allowed_hosts": allowed,
-            },
-            headers={"Authorization": f"Bearer {token}"},
+            f"{api_url}/v1/browser",
+            json={"ttl_seconds": ttl_seconds, "allowed_hosts": allowed},
+            headers={"Authorization": f"Bearer {api_key}"},
         )
         resp.raise_for_status()
         data = resp.json()
@@ -137,7 +97,6 @@ async def create_browser_lease(
         cdp_url=str(data["cdp_url"]),
         stream_url=str(data.get("stream_url", "")),
         host_domain=data["host_domain"],
-        cluster_name=cluster_name,
     )
     logger.info(
         f"Browser lease created: lease_id={lease.lease_id}, "
@@ -149,22 +108,21 @@ async def create_browser_lease(
         await _navigate_and_healthcheck(
             mcp_url=lease.mcp_url,
             target_url=instance_url,
-            token=token,
+            api_key=api_key,
         )
     except Exception as e:
-        # Cleanup lease on failure
         logger.warning(f"Browser healthcheck failed, deleting lease: {e}")
-        await delete_browser_lease(cluster_name, lease.lease_id)
+        await delete_browser_lease(lease.lease_id)
         raise
 
     return lease
 
 
 async def _navigate_and_healthcheck(
-    mcp_url: str, target_url: str, token: str
+    mcp_url: str, target_url: str, api_key: str
 ) -> None:
     """Navigate browser to target URL and verify via screenshot."""
-    mcp = FleetMCPClient(url=mcp_url, api_key=token)
+    mcp = FleetMCPClient(url=mcp_url, api_key=api_key)
 
     # Pre-navigation settle
     await asyncio.sleep(_NAVIGATE_SETTLE_SECONDS)
@@ -206,12 +164,10 @@ def _validate_screenshot(result) -> bool:
     """Check screenshot is non-trivial (not blank/error)."""
     if isinstance(result, dict) and "error" in result:
         return False
-    # For multimodal results (list with image_url items)
     if isinstance(result, list):
         for item in result:
             if isinstance(item, dict) and item.get("type") == "image_url":
                 data_url = item.get("image_url", {}).get("url", "")
-                # data:image/jpeg;base64,<data>
                 if ";base64," in data_url:
                     base64_data = data_url.split(";base64,", 1)[1]
                     if len(base64_data) >= _SCREENSHOT_MIN_BYTES:
@@ -219,18 +175,16 @@ def _validate_screenshot(result) -> bool:
     return False
 
 
-async def delete_browser_lease(cluster_name: str, lease_id: str) -> None:
+async def delete_browser_lease(lease_id: str) -> None:
     """Delete a browser lease. Best-effort, swallows errors."""
     try:
-        base_url = _browser_api_base_url(cluster_name)
-        token = _resolve_token()
+        api_url = os.getenv("BROWSER_API_BASE_URL", _BROWSER_API_URL).strip()
+        api_key = _resolve_api_key()
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.delete(
-                f"{base_url}/v1/browsers/lease/{lease_id}",
-                headers={"Authorization": f"Bearer {token}"},
+                f"{api_url}/v1/browser/{lease_id}",
+                headers={"Authorization": f"Bearer {api_key}"},
             )
-            logger.info(
-                f"Browser lease deleted: lease_id={lease_id}, status={resp.status_code}"
-            )
+            logger.info(f"Browser lease deleted: lease_id={lease_id}, status={resp.status_code}")
     except Exception as e:
         logger.warning(f"Failed to delete browser lease {lease_id}: {e}")
