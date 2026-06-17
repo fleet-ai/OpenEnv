@@ -112,6 +112,7 @@ async def upload_trace(
     reward: float,
     instance_id: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
+    verifier_execution_id: Optional[str] = None,
 ) -> Optional[str]:
     """Upload a conversation trace to the Fleet API.
 
@@ -172,6 +173,9 @@ async def upload_trace(
             payload["instance_id"] = instance_id
         if metadata:
             payload["metadata"] = metadata
+        # Without this, Fleet UI ignores the score field in group aggregations.
+        if verifier_execution_id:
+            payload["verifier_execution_id"] = verifier_execution_id
 
         async with httpx.AsyncClient(timeout=60) as client:
             response = await client.post(

@@ -163,12 +163,16 @@ class FleetTaskEnv:
         self.final_reward: Optional[float] = None
         self._submitted_answer: Optional[str] = None
         self._browser_lease = None  # BrowserLeaseResult for browser_use
-        self._browser_cluster_name: Optional[str] = None
 
         # Feedback for hint generation (accumulated during rollout)
         self._tool_errors: List[str] = []
         self._verifier_stdout: Optional[str] = None
         self._verifier_error: Optional[str] = None
+
+        # Required by the Fleet UI to surface a session's score in
+        # /v1/job-session-groups/{job_id} aggregations (score field alone is
+        # ignored). Populated by _compute_reward from response.execution_id.
+        self._last_verifier_execution_id: Optional[str] = None
 
         # Set telemetry context so init failures are tracked with full context
         set_task_context(
@@ -292,12 +296,10 @@ class FleetTaskEnv:
         )
 
         if self.modality == "browser_use":
-            from .browser_lease import create_browser_lease, extract_cluster_name
+            from .browser_lease import create_browser_lease
 
             root_url = str(self._orch._fleet_env.urls.root)
-            self._browser_cluster_name = extract_cluster_name(root_url)
             self._browser_lease = await create_browser_lease(
-                cluster_name=self._browser_cluster_name,
                 instance_url=root_url,
                 ttl_seconds=self.ttl_seconds,
             )
@@ -733,6 +735,13 @@ class FleetTaskEnv:
 
                     verifier_success = response.success
 
+                    # Save execution_id so the trace uploader can link the
+                    # session to this verifier run. Fleet UI requires this to
+                    # surface the score in /v1/job-session-groups aggregations.
+                    self._last_verifier_execution_id = getattr(
+                        response, "execution_id", None
+                    )
+
                     # Capture verifier feedback for hint generation
                     if hasattr(response, "stdout") and response.stdout:
                         self._verifier_stdout = response.stdout
@@ -834,7 +843,6 @@ class FleetTaskEnv:
 
                     asyncio.run(
                         delete_browser_lease(
-                            self._browser_cluster_name,
                             self._browser_lease.lease_id,
                         )
                     )
@@ -877,7 +885,6 @@ class FleetTaskEnv:
                     from .browser_lease import delete_browser_lease
 
                     await delete_browser_lease(
-                        self._browser_cluster_name,
                         self._browser_lease.lease_id,
                     )
                 except Exception:
