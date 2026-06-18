@@ -4,10 +4,13 @@ Provides functions to create trace jobs and upload conversation traces
 to the Fleet API for viewing in the Fleet UI (including screenshots).
 
 The Fleet trace API lives on the internal platform host, NOT the env
-orchestrator. The previous implementation pointed at
-`orchestrator.fleetai.com` (which is where the env-instance API lives) and
-authenticated with `X-API-Key` — both wrong, so every trace upload silently
-404'd. Verified by hand against the live OpenAPI spec on 2026-06-16:
+orchestrator. /v1/traces/logs binds `TraceLogIngestRequest` and reads each
+`parts[*]` as a Gemini `Part`. Only these `Part` fields are inspected:
+`text`, `thought`, `inline_data` ({"data", "mime_type"}), `function_call`,
+`function_response`. Extra keys (e.g. `type`) are silently ignored — which
+is why the previous `{"type":"image","mime_type":...,"data":...}` shape
+uploaded fine but the server saw `inline_data=None` and dropped the image
+before the S3 sidecar that renders it in the UI ran.
 
   POST https://api.internal.fleet-platform.fleetai.com/v1/traces/jobs
        Authorization: Bearer <api_key>
@@ -18,9 +21,12 @@ authenticated with `X-API-Key` — both wrong, so every trace upload silently
        Authorization: Bearer <api_key>
        body: {
          "history": [
-           {"role": "user", "parts": [{"type": "text", "text": "..."}]},
-           {"role": "assistant", "parts": [{"type": "text", "text": "..."}]},
-           ...
+           {"role": "user", "parts": [{"text": "..."}]},
+           {"role": "assistant", "parts": [{"text": "..."}]},
+           {"role": "user", "parts": [
+              {"inline_data": {"mime_type": "image/png", "data": "<b64>"}},
+              {"text": "[Turn 5/64]"},
+           ]},
          ],
          "job_id": "<from /v1/traces/jobs>",
          "task_key": "...",
@@ -31,8 +37,9 @@ authenticated with `X-API-Key` — both wrong, so every trace upload silently
        }
        returns: {"success": true, "session_id": "...", ...}
 
-The body shape for /v1/traces/logs uses `history` (not `messages`) with each
-message holding a `parts` array of typed blocks (not a `content` string).
+S3 upload of base64 image bytes is handled server-side by `process_content`
+(theseus/orchestrator/core/session_content.py) — no client-side presigned-URL
+step. Send the base64 in `inline_data.data` directly.
 """
 
 import logging
@@ -44,34 +51,28 @@ logger = logging.getLogger(__name__)
 _FLEET_TRACE_HOST = "https://api.internal.fleet-platform.fleetai.com"
 
 
-def _convert_image_block(block: Dict[str, Any]) -> Dict[str, Any]:
-    """Convert an OpenAI image_url block to Fleet ingest image format.
+def _openai_block_to_gemini_part(block: Dict[str, Any]) -> Dict[str, Any]:
+    """Convert one OpenAI content block to a Gemini Part the trace API reads.
 
-    Fleet ingest API expects: {"type": "image", "mime_type": "image/png", "data": "<base64>"}
-    It then uploads base64 to S3 and replaces with URL for the UI to render.
+    Server reads `part.inline_data.{data,mime_type}` for images and `part.text`
+    for text. Anything else is silently ignored.
     """
-    url = block.get("image_url", {}).get("url", "")
-    if url.startswith("data:"):
-        # data:image/png;base64,ABC... -> extract mime_type and base64 data
-        header, base64_data = url.split(",", 1)
-        mime_type = header.split(":")[1].split(";")[0] if ":" in header else "image/png"
-        return {"type": "image", "mime_type": mime_type, "data": base64_data}
-    else:
-        # HTTPS URL - pass as text since ingest API expects base64 for images
-        return {"type": "text", "text": url}
-
-
-def _convert_content(content: Any) -> Any:
-    """Convert OpenAI-format content blocks to Anthropic format for Fleet UI."""
-    if not isinstance(content, list):
-        return content
-    converted = []
-    for block in content:
-        if isinstance(block, dict) and block.get("type") == "image_url":
-            converted.append(_convert_image_block(block))
-        else:
-            converted.append(block)
-    return converted
+    btype = block.get("type")
+    if btype == "image_url":
+        url = block.get("image_url", {}).get("url", "")
+        if url.startswith("data:"):
+            header, base64_data = url.split(",", 1)
+            mime_type = (
+                header.split(":")[1].split(";")[0] if ":" in header else "image/png"
+            )
+            return {"inline_data": {"mime_type": mime_type, "data": base64_data}}
+        # Remote URL — server has no fetcher; surface the URL as text so the
+        # trace at least carries a clickable reference instead of a black hole.
+        return {"text": f"[image url] {url}"}
+    if btype == "text":
+        return {"text": block.get("text", "")}
+    # Unknown block — preserve as text so the trace still uploads.
+    return {"text": str(block)}
 
 
 async def create_trace_job(api_key: str, name: str) -> str:
@@ -136,30 +137,22 @@ async def upload_trace(
     try:
         import httpx
 
-        # Fleet /v1/traces/logs expects each history entry as
-        #   {"role": "...", "parts": [{"type": "text"|"image", ...}, ...]}
-        # The legacy `messages`/`content` shape was the wrong endpoint's
-        # contract. Image entries are emitted as
-        #   {"type": "image", "mime_type": "...", "data": "<base64>"}
-        # so the UI can render screenshots inline.
+        # Each chat_history entry → one Gemini-shaped history entry. Each
+        # OpenAI content block → one Part. Images use `inline_data` (server
+        # routes those through process_content for S3 upload + UI rendering);
+        # text uses `text`. Server ignores extra keys, so the prior
+        # `{"type":"image",...}` shape silently dropped screenshots.
         history = []
         for msg in chat_history:
-            converted = _convert_content(msg.get("content"))
-            if isinstance(converted, list):
-                parts = []
-                for block in converted:
-                    if isinstance(block, dict):
-                        if block.get("type") == "image":
-                            parts.append(block)
-                        elif block.get("type") == "text":
-                            parts.append({"type": "text", "text": block.get("text", "")})
-                        else:
-                            # Unknown block — flatten to text so the trace still uploads.
-                            parts.append({"type": "text", "text": str(block)})
-                    else:
-                        parts.append({"type": "text", "text": str(block)})
+            content = msg.get("content")
+            if isinstance(content, list):
+                parts = [
+                    _openai_block_to_gemini_part(b) if isinstance(b, dict)
+                    else {"text": str(b)}
+                    for b in content
+                ]
             else:
-                parts = [{"type": "text", "text": str(converted) if converted is not None else ""}]
+                parts = [{"text": str(content) if content is not None else ""}]
             history.append({"role": msg.get("role", "user"), "parts": parts})
 
         payload: Dict[str, Any] = {
