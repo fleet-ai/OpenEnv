@@ -628,16 +628,99 @@ class FleetTaskEnv:
 
         return obs, reward, self._done, info
 
-    @staticmethod
-    def _parse_partial_reward(stdout: str) -> Optional[float]:
+    # Markers that indicate an app's success_accumulator entry is a no-op
+    # ("verified no unexpected changes") rather than real per-task work. Used
+    # by `_parse_multi_app_partial_reward` to drop trivial-pass apps from the
+    # denominator so a 1/3-apps-pass rollout where the 1 is "medora had no
+    # required changes for this task" doesn't inflate to reward=0.33.
+    _TRIVIAL_PASS_MARKERS = (
+        "no unexpected changes",
+        "No filesystem changes",
+        "No-unexpected-envelopes",
+    )
+
+    @classmethod
+    def _parse_multi_app_partial_reward(cls, stdout: str) -> Optional[float]:
+        """Parse multi-app verifier output into a fractional reward.
+
+        BU/CU verifiers in the v6 datasets use a `verify_multi_app_*`
+        aggregator that emits per-app blocks:
+
+            <<< VERIFY_outlook <<<
+            >>> ERROR_ACCUMULATOR >>>
+            [...]
+            <<< ERROR_ACCUMULATOR <<<
+            >>> SUCCESS_ACCUMULATOR >>>
+            [...]
+            <<< SUCCESS_ACCUMULATOR <<<
+            >>> VERIFY_outlook >>>
+            App outlook: 0
+            ...
+            Combined result: 1/3 apps passed
+
+        and binary-aggregate with `min()`. Returns `(n_real_pass / n_real_apps)`
+        where "real" excludes apps whose only success entry is a
+        "no unexpected changes" marker (those passed trivially because the
+        task didn't require any work in that app).
+
+        Returns None if the multi-app pattern isn't detected; caller falls
+        back to the single-accumulator path.
+        """
+        app_results = re.findall(r"^App (\S+): (\d+)$", stdout, re.MULTILINE)
+        if not app_results:
+            return None
+
+        n_real_pass = 0
+        n_real_apps = 0
+        for app_name, app_score in app_results:
+            passed = app_score == "1"
+            # Carve out this app's success_accumulator (between its
+            # `<<< VERIFY_<app> <<<` and `>>> VERIFY_<app> >>>` markers).
+            block_match = re.search(
+                rf"<<< VERIFY_{re.escape(app_name)} <<<(.*?)>>> VERIFY_{re.escape(app_name)} >>>",
+                stdout,
+                re.DOTALL,
+            )
+            success_text = ""
+            if block_match:
+                suc_match = re.search(
+                    r">>> SUCCESS_ACCUMULATOR >>>\n(.+?)\n<<< SUCCESS_ACCUMULATOR <<<",
+                    block_match.group(1),
+                    re.DOTALL,
+                )
+                if suc_match:
+                    success_text = suc_match.group(1)
+            is_trivial = passed and any(
+                marker.lower() in success_text.lower()
+                for marker in cls._TRIVIAL_PASS_MARKERS
+            )
+            if is_trivial:
+                continue
+            n_real_apps += 1
+            if passed:
+                n_real_pass += 1
+
+        if n_real_apps == 0:
+            return None
+        return n_real_pass / n_real_apps
+
+    @classmethod
+    def _parse_partial_reward(cls, stdout: str) -> Optional[float]:
         """Parse partial reward from verifier accumulator output.
 
-        Verifiers print error/success accumulators to stdout. This parses
-        them to compute a fractional score (n_success / total_checks).
+        Detects whether the verifier is multi-app (per-app `App X: N` lines).
+        If yes, commits to that path — including returning None when all
+        passing apps are trivial — so we never accidentally re-grade the
+        same stdout via the single-accumulator fallback and pick up one
+        app's accumulator as the whole answer.
 
         Returns:
-            Partial score in [0, 1], or None if accumulators not found.
+            Partial score in [0, 1], or None if no accumulator format found
+            (or the multi-app result is "no real signal").
         """
+        if re.search(r"^App \S+: \d+$", stdout, re.MULTILINE):
+            return cls._parse_multi_app_partial_reward(stdout)
+
         err_match = re.search(
             r">>> ERROR_ACCUMULATOR >>>\n(.+?)\n<<< ERROR_ACCUMULATOR <<<",
             stdout,
