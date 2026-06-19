@@ -1,102 +1,186 @@
 """Fleet trace upload utilities for eval rollouts.
 
-Provides functions to create trace jobs and upload conversation traces
-to the Fleet API for viewing in the Fleet UI (including screenshots).
+Provides functions to create trace jobs and upload conversation traces to
+the Fleet API for viewing in the Fleet UI (including screenshots).
 
-The Fleet trace API lives on the internal platform host, NOT the env
-orchestrator. /v1/traces/logs binds `TraceLogIngestRequest` and reads each
-`parts[*]` as a Gemini `Part`. Only these `Part` fields are inspected:
-`text`, `thought`, `inline_data` ({"data", "mime_type"}), `function_call`,
-`function_response`. Extra keys (e.g. `type`) are silently ignored — which
-is why the previous `{"type":"image","mime_type":...,"data":...}` shape
-uploaded fine but the server saw `inline_data=None` and dropped the image
-before the S3 sidecar that renders it in the UI ran.
+## Why this file is the way it is
 
-  POST https://api.internal.fleet-platform.fleetai.com/v1/traces/jobs
-       Authorization: Bearer <api_key>
-       body: {"name": "<job_name>"}
-       returns: {"job_id": "...", "name": "...", "status": "completed"}
+There are two Fleet API endpoints that can accept session data, and only
+one of them stores images where the Fleet UI can render them:
 
-  POST https://api.internal.fleet-platform.fleetai.com/v1/traces/logs
-       Authorization: Bearer <api_key>
-       body: {
-         "history": [
-           {"role": "user", "parts": [{"text": "..."}]},
-           {"role": "assistant", "parts": [{"text": "..."}]},
-           {"role": "user", "parts": [
-              {"inline_data": {"mime_type": "image/png", "data": "<b64>"}},
-              {"text": "[Turn 5/64]"},
-           ]},
-         ],
-         "job_id": "<from /v1/traces/jobs>",
-         "task_key": "...",
-         "model": "...",
-         "score": <float>,
-         "instance_id": "<optional>",
-         "metadata": {...},
-       }
-       returns: {"success": true, "session_id": "...", ...}
+  /v1/traces/logs           → uploads to s3://theseus-model-traces (PRIVATE)
+                              UI fetch returns HTTP 403. Image renders as broken.
+  /v1/sessions/ingest       → does NOT pre-upload images for you. If you send
+                              base64 data URLs inline, the server stores the
+                              data URL verbatim and the UI tries to <img src=
+                              the data URL — which works only for tiny images
+                              and bloats the message store.
 
-S3 upload of base64 image bytes is handled server-side by `process_content`
-(theseus/orchestrator/core/session_content.py) — no client-side presigned-URL
-step. Send the base64 in `inline_data.data` directly.
+The path that actually works end-to-end is:
+
+  1. Client uploads each screenshot directly to
+     s3://fleet-sessions-images/harness/screenshot/<sha256>.jpeg
+     using its own AWS credentials. This bucket is PUBLIC-READ, so the
+     Fleet UI can <img src=https://.../...jpeg> with no auth.
+  2. Client rewrites each `data:image/...;base64,...` URL in the chat
+     history to the resulting HTTPS URL.
+  3. Client POSTs the rewritten chat history to
+     `https://orchestrator.fleetai.com/v1/sessions/ingest` as
+     `SessionIngestMessage` shape (role + content, OpenAI multimodal blocks).
+
+That mirrors what the legacy skyrl harness did and what nova/import_traces.py
+does today (see theseus/nova/import_traces.py:upload_screenshot_to_s3).
+
+## Earlier mistake
+
+A prior version of this file targeted /v1/traces/logs and emitted Gemini
+`inline_data` parts. The server accepted the upload and uploaded the
+base64 to s3://theseus-model-traces — a private bucket. The UI then could
+not render any of the screenshots (403 on every <img>). The current code
+abandons that path.
 """
 
+import asyncio
+import base64
+import hashlib
 import logging
-from typing import Any, Dict, List, Optional
+import os
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-# Fleet trace API host (NOT the env orchestrator).
-_FLEET_TRACE_HOST = "https://api.internal.fleet-platform.fleetai.com"
+
+# Endpoint for session ingest — same host as the env orchestrator API.
+_FLEET_API_HOST = "https://orchestrator.fleetai.com"
+
+# Public-read bucket the Fleet UI fetches screenshots from. The harness IAM
+# user (AWS_ACCESS_KEY_ID) needs s3:PutObject on this prefix.
+_SCREENSHOT_BUCKET = "fleet-sessions-images"
+_SCREENSHOT_PREFIX = "harness/screenshot"
+_SCREENSHOT_REGION = "us-east-1"
 
 
-def _openai_block_to_gemini_part(block: Dict[str, Any]) -> Dict[str, Any]:
-    """Convert one OpenAI content block to a Gemini Part the trace API reads.
+def _split_data_url(url: str) -> Optional[Tuple[bytes, str]]:
+    """Decode a `data:image/...;base64,...` URL into `(bytes, mime_type)`.
 
-    Server reads `part.inline_data.{data,mime_type}` for images and `part.text`
-    for text. Anything else is silently ignored.
+    Returns None for URLs that aren't `data:` (already an HTTPS URL — leave
+    them alone) or that fail to decode.
     """
-    btype = block.get("type")
-    if btype == "image_url":
-        url = block.get("image_url", {}).get("url", "")
-        if url.startswith("data:"):
-            header, base64_data = url.split(",", 1)
-            mime_type = (
-                header.split(":")[1].split(";")[0] if ":" in header else "image/png"
-            )
-            return {"inline_data": {"mime_type": mime_type, "data": base64_data}}
-        # Remote URL — server has no fetcher; surface the URL as text so the
-        # trace at least carries a clickable reference instead of a black hole.
-        return {"text": f"[image url] {url}"}
-    if btype == "text":
-        return {"text": block.get("text", "")}
-    # Unknown block — preserve as text so the trace still uploads.
-    return {"text": str(block)}
+    if not url.startswith("data:"):
+        return None
+    try:
+        header, base64_data = url.split(",", 1)
+        mime_type = header.split(":")[1].split(";")[0] if ":" in header else "image/png"
+        return base64.b64decode(base64_data), mime_type
+    except Exception:
+        return None
+
+
+def _s3_key_for(image_bytes: bytes, mime_type: str) -> str:
+    """Deduplicating S3 key. Same image bytes -> same key, so re-uploaded
+    screenshots (browser cache hits, screenshot repeats) reuse the upload."""
+    ext = "jpeg" if "jpeg" in mime_type or "jpg" in mime_type else "png"
+    return f"{_SCREENSHOT_PREFIX}/{hashlib.sha256(image_bytes).hexdigest()[:24]}.{ext}"
+
+
+def _upload_image_to_public_bucket(image_bytes: bytes, mime_type: str) -> Optional[str]:
+    """Best-effort S3 put. Returns the HTTPS URL on success, None on failure.
+
+    boto3 head_object is checked first so a second turn with the same screenshot
+    skips a put. Failures here downgrade gracefully — the trace upload still
+    proceeds, just with the original data URL (which the UI won't render but
+    won't crash on).
+    """
+    try:
+        import boto3
+    except Exception as e:
+        logger.warning(f"boto3 unavailable for screenshot upload: {e}")
+        return None
+
+    key = _s3_key_for(image_bytes, mime_type)
+    url = f"https://{_SCREENSHOT_BUCKET}.s3.{_SCREENSHOT_REGION}.amazonaws.com/{key}"
+    s3 = boto3.client(
+        "s3",
+        aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID"),
+        aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_KEY"),
+        region_name=_SCREENSHOT_REGION,
+    )
+    try:
+        try:
+            s3.head_object(Bucket=_SCREENSHOT_BUCKET, Key=key)
+            return url  # already exists, dedup hit
+        except Exception:
+            pass
+        s3.put_object(
+            Bucket=_SCREENSHOT_BUCKET,
+            Key=key,
+            Body=image_bytes,
+            ContentType=mime_type,
+        )
+        return url
+    except Exception as e:
+        logger.warning(f"S3 put_object failed for {key}: {e}")
+        return None
+
+
+def _rewrite_block_with_https_image(block: Dict[str, Any]) -> Dict[str, Any]:
+    """If block is an OpenAI `image_url` block carrying a base64 data URL,
+    upload it and return the same shape with the URL swapped for the public
+    HTTPS one. Other blocks pass through unchanged.
+
+    Sync (boto3 is sync). Called from `to_thread` to avoid blocking the
+    upload_trace coroutine.
+    """
+    if not isinstance(block, dict) or block.get("type") != "image_url":
+        return block
+    iu = block.get("image_url")
+    url = iu.get("url", "") if isinstance(iu, dict) else (iu or "")
+    decoded = _split_data_url(url)
+    if decoded is None:
+        return block  # already an HTTPS URL (or malformed) — leave alone
+    image_bytes, mime_type = decoded
+    https = _upload_image_to_public_bucket(image_bytes, mime_type)
+    if https is None:
+        return block
+    return {"type": "image_url", "image_url": {"url": https}}
+
+
+async def _rewrite_chat_history(
+    chat_history: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Walk every message; replace base64 image_url blocks with HTTPS URLs.
+
+    S3 puts run in a thread pool so we don't block the event loop. Identical
+    screenshots within a session dedup at the S3 key level.
+    """
+    rewritten: List[Dict[str, Any]] = []
+    for msg in chat_history:
+        c = msg.get("content")
+        if isinstance(c, list):
+            new_blocks = await asyncio.gather(*[
+                asyncio.to_thread(_rewrite_block_with_https_image, b) for b in c
+            ])
+            new_msg = dict(msg)
+            new_msg["content"] = list(new_blocks)
+            rewritten.append(new_msg)
+        else:
+            rewritten.append(msg)
+    return rewritten
 
 
 async def create_trace_job(api_key: str, name: str) -> str:
-    """Create a Fleet trace job for grouping eval traces.
+    """Create a trace job (a grouping container for sessions) on the
+    orchestrator. The session ingest call references this `job_id` so the
+    Fleet UI groups all sessions under one Job page.
 
-    Hits the trace host directly with Bearer auth. The Fleet SDK's
-    `AsyncFleet.trace_job` points at the env orchestrator with `X-API-Key`
-    which returns 404; that's why every prior caller was silently failing.
-
-    Args:
-        api_key: Fleet API key.
-        name: Name for the trace job (e.g. "run_name_step_100").
-
-    Returns:
-        The job_id string.
-
-    Raises:
-        httpx.HTTPStatusError on non-2xx; callers should wrap in try/except.
+    Endpoint: POST orchestrator/v1/traces/jobs
+    Returns the new job_id.
     """
     import httpx
 
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(
-            f"{_FLEET_TRACE_HOST}/v1/traces/jobs",
+            f"{_FLEET_API_HOST}/v1/traces/jobs",
             json={"name": name},
             headers={"Authorization": f"Bearer {api_key}"},
         )
@@ -115,64 +199,49 @@ async def upload_trace(
     metadata: Optional[Dict[str, Any]] = None,
     verifier_execution_id: Optional[str] = None,
 ) -> Optional[str]:
-    """Upload a conversation trace to the Fleet API.
+    """Upload a conversation trace to Fleet via /v1/sessions/ingest.
 
-    Converts chat_history (OpenAI message format) to Fleet SessionIngestMessage
-    format and ingests it as a trace session.
+    Steps:
+      1. Walk the chat_history; for every multimodal image_url block carrying
+         a base64 data URL, upload to s3://fleet-sessions-images and rewrite
+         to the HTTPS URL (deduplicated by content hash).
+      2. POST the rewritten chat_history (still OpenAI multimodal shape) as
+         SessionIngestMessage records.
 
-    Args:
-        api_key: Fleet API key.
-        job_id: Trace job ID from create_trace_job().
-        task_key: Fleet task key.
-        model: Model identifier (e.g. model path or name).
-        chat_history: List of messages in OpenAI format (system/user/assistant).
-            May contain multimodal content with image_url entries.
-        reward: Episode reward (>0 = completed, else failed).
-        instance_id: Optional Fleet environment instance ID.
-        metadata: Optional additional metadata dict.
-
-    Returns:
-        The session_id string, or None if upload failed.
+    Returns the new session_id on success, or None on failure (logged).
+    Failures here never propagate — a missed trace upload should not abort
+    the actual training rollout.
     """
     try:
         import httpx
 
-        # Each chat_history entry → one Gemini-shaped history entry. Each
-        # OpenAI content block → one Part. Images use `inline_data` (server
-        # routes those through process_content for S3 upload + UI rendering);
-        # text uses `text`. Server ignores extra keys, so the prior
-        # `{"type":"image",...}` shape silently dropped screenshots.
-        history = []
-        for msg in chat_history:
-            content = msg.get("content")
-            if isinstance(content, list):
-                parts = [
-                    _openai_block_to_gemini_part(b) if isinstance(b, dict)
-                    else {"text": str(b)}
-                    for b in content
-                ]
-            else:
-                parts = [{"text": str(content) if content is not None else ""}]
-            history.append({"role": msg.get("role", "user"), "parts": parts})
+        rewritten = await _rewrite_chat_history(chat_history)
+
+        messages: List[Dict[str, Any]] = []
+        for msg in rewritten:
+            messages.append({
+                "role": msg.get("role", "user"),
+                "content": msg.get("content"),
+            })
 
         payload: Dict[str, Any] = {
-            "history": history,
+            "messages": messages,
             "job_id": job_id,
             "task_key": task_key,
             "model": model,
-            "score": reward,
+            # Fleet UI surfaces session pass/fail in groupings; the field is
+            # called "score" on the legacy traces endpoint but the session
+            # ingest endpoint reads it from metadata.
+            "metadata": dict(metadata or {}, score=reward),
         }
         if instance_id:
             payload["instance_id"] = instance_id
-        if metadata:
-            payload["metadata"] = metadata
-        # Without this, Fleet UI ignores the score field in group aggregations.
         if verifier_execution_id:
             payload["verifier_execution_id"] = verifier_execution_id
 
-        async with httpx.AsyncClient(timeout=60) as client:
+        async with httpx.AsyncClient(timeout=120) as client:
             response = await client.post(
-                f"{_FLEET_TRACE_HOST}/v1/traces/logs",
+                f"{_FLEET_API_HOST}/v1/sessions/ingest",
                 json=payload,
                 headers={"Authorization": f"Bearer {api_key}"},
             )
