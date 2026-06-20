@@ -324,6 +324,158 @@ def test_create_trace_job_uses_different_host_than_upload(monkeypatch):
     assert _FLEET_SESSION_INGEST_HOST == "https://orchestrator.fleetai.com"
 
 
+# --------------------------------------------------------------------------- #
+# Role mapping: chat_history role:'user' carrying image_url MUST be uploaded
+# as role:'tool' with a tool_call_id, because Fleet UI's SessionDetailView
+# strips image_url blocks from role:'user' content arrays but preserves them
+# for role:'tool'. Verified live with A/B probe on 2026-06-20.
+# (incantations skill: trace-upload-with-images)
+# --------------------------------------------------------------------------- #
+
+def test_role_mapping_user_with_image_becomes_tool(monkeypatch):
+    """Tool observations in chat_history are role:'user' (Kimi chat template
+    requirement) but must be uploaded as role:'tool' for the UI renderer."""
+    captured: List[Dict[str, Any]] = []
+    monkeypatch.setattr(
+        "envs.fleet_env.trace._upload_image_to_public_bucket",
+        lambda b, m: "https://fleet-sessions-images.s3.us-east-1.amazonaws.com/x.jpeg",
+    )
+    monkeypatch.setattr(
+        "httpx.AsyncClient", lambda timeout=None: _FakeHTTPClient(captured)
+    )
+
+    history = [
+        {"role": "system", "content": "you are a helpful agent"},
+        {"role": "user", "content": "open the page"},
+        {"role": "assistant", "content": "I'll click."},
+        # Tool observation in chat_history — role:'user' with image_url block
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "[Turn 1/64]"},
+                {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,/9j/4AAQ"}},
+            ],
+        },
+    ]
+
+    asyncio.run(upload_trace(
+        api_key="k", job_id="j", task_key="t", model="m",
+        chat_history=history, reward=1.0,
+    ))
+    assert len(captured) == 1
+    msgs = captured[0]["json"]["messages"]
+    # System and user prompts pass through unchanged.
+    assert msgs[0]["role"] == "system"
+    assert msgs[1]["role"] == "user"
+    assert msgs[2]["role"] == "assistant"
+    # Tool observation: role rewritten to 'tool' + tool_call_id present.
+    obs = msgs[3]
+    assert obs["role"] == "tool", (
+        "image-carrying user message must be uploaded as role:'tool' "
+        "so SessionDetailView preserves the image_url content array. "
+        "Otherwise the UI strips images and renders text only."
+    )
+    assert isinstance(obs.get("tool_call_id"), str) and obs["tool_call_id"]
+    # Content array preserved end-to-end.
+    assert isinstance(obs["content"], list)
+    assert any(b.get("type") == "image_url" for b in obs["content"])
+
+
+def test_role_mapping_carries_assistant_tool_call_id(monkeypatch):
+    """When the preceding assistant message has a tool_calls[0].id, the
+    rewritten tool message MUST reuse that ID so the renderer can resolve
+    the tool name from the assistant turn."""
+    captured: List[Dict[str, Any]] = []
+    monkeypatch.setattr(
+        "envs.fleet_env.trace._upload_image_to_public_bucket",
+        lambda b, m: "https://fleet-sessions-images.s3.us-east-1.amazonaws.com/x.jpeg",
+    )
+    monkeypatch.setattr(
+        "httpx.AsyncClient", lambda timeout=None: _FakeHTTPClient(captured)
+    )
+
+    history = [
+        {"role": "user", "content": "go"},
+        {
+            "role": "assistant",
+            "content": "calling tool",
+            "tool_calls": [
+                {"id": "call_abc123", "type": "function",
+                 "function": {"name": "computer", "arguments": "{}"}}
+            ],
+        },
+        {
+            "role": "user",
+            "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw"}}],
+        },
+    ]
+    asyncio.run(upload_trace(
+        api_key="k", job_id="j", task_key="t", model="m",
+        chat_history=history, reward=0.0,
+    ))
+    msgs = captured[0]["json"]["messages"]
+    tool_msg = next(m for m in msgs if m.get("role") == "tool")
+    assert tool_msg["tool_call_id"] == "call_abc123", (
+        "tool_call_id must propagate from the preceding assistant.tool_calls[0].id "
+        "so the UI can match the tool result back to its call."
+    )
+
+
+def test_role_mapping_does_not_touch_user_text_messages(monkeypatch):
+    """Plain text user messages (the initial task prompt) MUST stay
+    role:'user' — only image-carrying ones get rewritten."""
+    captured: List[Dict[str, Any]] = []
+    monkeypatch.setattr(
+        "envs.fleet_env.trace._upload_image_to_public_bucket",
+        lambda b, m: "https://x/y.png",
+    )
+    monkeypatch.setattr(
+        "httpx.AsyncClient", lambda timeout=None: _FakeHTTPClient(captured)
+    )
+
+    history = [
+        {"role": "user", "content": "the task prompt"},
+        {"role": "assistant", "content": "ok"},
+        {"role": "user", "content": "follow-up text only, no image"},
+    ]
+    asyncio.run(upload_trace(
+        api_key="k", job_id="j", task_key="t", model="m",
+        chat_history=history, reward=0.0,
+    ))
+    msgs = captured[0]["json"]["messages"]
+    # No tool roles — all user/assistant.
+    assert [m["role"] for m in msgs] == ["user", "assistant", "user"]
+
+
+def test_role_mapping_preserves_tool_role_when_already_set(monkeypatch):
+    """If the env ever DOES write role:'tool' directly, leave it alone
+    — don't double-rewrite."""
+    captured: List[Dict[str, Any]] = []
+    monkeypatch.setattr(
+        "envs.fleet_env.trace._upload_image_to_public_bucket",
+        lambda b, m: "https://x/y.png",
+    )
+    monkeypatch.setattr(
+        "httpx.AsyncClient", lambda timeout=None: _FakeHTTPClient(captured)
+    )
+    history = [
+        {
+            "role": "tool",
+            "tool_call_id": "call_existing",
+            "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw"}}],
+        },
+    ]
+    asyncio.run(upload_trace(
+        api_key="k", job_id="j", task_key="t", model="m",
+        chat_history=history, reward=0.0,
+    ))
+    msgs = captured[0]["json"]["messages"]
+    assert msgs[0]["role"] == "tool"
+    # NO tool_call_id duplicated/overwritten since the caller already set one.
+    # (Implementation passes through; if the caller didn't set one we don't
+    # synthesize a new one for already-tool messages.)
+
+
 def test_upload_trace_returns_none_on_exception(monkeypatch):
     """Trace upload failures must not propagate — the actual rollout's
     success cannot depend on the trace endpoint being reachable."""

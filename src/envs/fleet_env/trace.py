@@ -45,6 +45,7 @@ import base64
 import hashlib
 import logging
 import os
+import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -234,12 +235,46 @@ async def upload_trace(
 
         rewritten = await _rewrite_chat_history(chat_history)
 
+        # Rename `role:'user'` → `role:'tool'` for messages that carry an
+        # `image_url` content block. The Fleet UI's `SessionDetailView.tsx`
+        # has two transformers for content arrays: `role:'tool'` JSON-
+        # stringifies the array (image_url blocks survive to the renderer),
+        # but `role:'user'` runs a "text-only" strip that drops image_url
+        # blocks before the renderer sees them. The model's chat_history
+        # must keep role:'user' for tool observations because Kimi's chat
+        # template binds them that way — rename ONLY at upload time, never
+        # in the env's chat_history. Cross-checked with an A/B probe on
+        # 2026-06-20 (incantations skill: trace-upload-with-images).
+        #
+        # The renderer also keys off `tool_call_id` to look up the tool
+        # name. We carry the most recent assistant tool_calls[0].id forward
+        # if it exists, otherwise synthesize a UUID so the UI has something
+        # stable to bind against.
         messages: List[Dict[str, Any]] = []
+        pending_tool_call_id: Optional[str] = None
         for msg in rewritten:
-            messages.append({
-                "role": msg.get("role", "user"),
-                "content": msg.get("content"),
-            })
+            role = msg.get("role", "user")
+            content = msg.get("content")
+            if role == "assistant":
+                tcs = msg.get("tool_calls") or []
+                if tcs:
+                    try:
+                        pending_tool_call_id = tcs[0].get("id") or f"call_{uuid.uuid4().hex[:8]}"
+                    except Exception:
+                        pending_tool_call_id = f"call_{uuid.uuid4().hex[:8]}"
+            carries_image = isinstance(content, list) and any(
+                isinstance(b, dict) and b.get("type") == "image_url" for b in content
+            )
+            if role == "user" and carries_image:
+                entry: Dict[str, Any] = {
+                    "role": "tool",
+                    "content": content,
+                    "tool_call_id": pending_tool_call_id or f"call_{uuid.uuid4().hex[:8]}",
+                }
+                messages.append(entry)
+                pending_tool_call_id = None  # consumed by this tool result
+            else:
+                messages.append({"role": role, "content": content})
 
         payload: Dict[str, Any] = {
             "messages": messages,
