@@ -50,8 +50,25 @@ from typing import Any, Dict, List, Optional, Tuple
 logger = logging.getLogger(__name__)
 
 
-# Endpoint for session ingest — same host as the env orchestrator API.
-_FLEET_API_HOST = "https://orchestrator.fleetai.com"
+# Two Fleet hosts are involved. They share one Supabase job pool — a job_id
+# minted on one is recognized by the other and renders correctly under the
+# dashboard's /jobs/<id> URL either way — but the create-job and
+# session-ingest endpoints live on different services:
+#
+#   _FLEET_TRACE_JOBS_HOST    : platform host. POST /v1/traces/jobs to mint
+#                               a trace job_id. Returns {"job_id","name","status"}.
+#   _FLEET_SESSION_INGEST_HOST: orchestrator. POST /v1/sessions/ingest for
+#                               per-session uploads (OpenAI message shape,
+#                               accepts image_url blocks with HTTPS URLs).
+#
+# Earlier mistake: collapsed both into a single host (orchestrator), which
+# 404'd `POST orchestrator/v1/traces/jobs` and silently disabled all session
+# uploads. set_trace_config() never ran because create_trace_job had thrown
+# inside an outer try/except, episode_done found no trace config, no
+# sessions were posted, training proceeded silently with an empty UI.
+# Keep these split.
+_FLEET_TRACE_JOBS_HOST = "https://api.internal.fleet-platform.fleetai.com"
+_FLEET_SESSION_INGEST_HOST = "https://orchestrator.fleetai.com"
 
 # Public-read bucket the Fleet UI fetches screenshots from. The harness IAM
 # user (AWS_ACCESS_KEY_ID) needs s3:PutObject on this prefix.
@@ -170,17 +187,17 @@ async def _rewrite_chat_history(
 
 async def create_trace_job(api_key: str, name: str) -> str:
     """Create a trace job (a grouping container for sessions) on the
-    orchestrator. The session ingest call references this `job_id` so the
-    Fleet UI groups all sessions under one Job page.
+    PLATFORM host. The session ingest endpoint (on the orchestrator) accepts
+    the returned job_id because both services share a Supabase job pool.
 
-    Endpoint: POST orchestrator/v1/traces/jobs
-    Returns the new job_id.
+    Endpoint: POST <platform-host>/v1/traces/jobs
+    Returns the new job_id (a UUID string).
     """
     import httpx
 
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(
-            f"{_FLEET_API_HOST}/v1/traces/jobs",
+            f"{_FLEET_TRACE_JOBS_HOST}/v1/traces/jobs",
             json={"name": name},
             headers={"Authorization": f"Bearer {api_key}"},
         )
@@ -241,7 +258,7 @@ async def upload_trace(
 
         async with httpx.AsyncClient(timeout=120) as client:
             response = await client.post(
-                f"{_FLEET_API_HOST}/v1/sessions/ingest",
+                f"{_FLEET_SESSION_INGEST_HOST}/v1/sessions/ingest",
                 json=payload,
                 headers={"Authorization": f"Bearer {api_key}"},
             )

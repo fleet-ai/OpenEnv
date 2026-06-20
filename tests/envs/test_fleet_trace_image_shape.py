@@ -245,8 +245,11 @@ def test_upload_trace_posts_openai_shape_to_sessions_ingest(monkeypatch):
     assert len(captured) == 1
     body = captured[0]["json"]
 
-    # Endpoint and auth shape
-    assert captured[0]["url"].endswith("/v1/sessions/ingest")
+    # Endpoint and auth shape. Session ingest MUST go to the orchestrator
+    # host; the platform host does not expose /v1/sessions/ingest.
+    assert captured[0]["url"] == (
+        "https://orchestrator.fleetai.com/v1/sessions/ingest"
+    )
     assert captured[0]["headers"]["Authorization"] == "Bearer k"
 
     # Payload is OpenAI shape — `messages`, not `history`.
@@ -262,6 +265,63 @@ def test_upload_trace_posts_openai_shape_to_sessions_ingest(monkeypatch):
 
     # Reward survives on metadata.score (the UI groupings expect that key).
     assert body["metadata"]["score"] == 1.0
+
+
+# --------------------------------------------------------------------------- #
+# create_trace_job — host MUST be platform-internal, not orchestrator.
+# Regression: an earlier rewrite collapsed both calls to the orchestrator
+# host, which 404'd /v1/traces/jobs and silently disabled all session
+# uploads (set_trace_config never ran). Pin the right host explicitly.
+# --------------------------------------------------------------------------- #
+
+def test_create_trace_job_posts_to_platform_host(monkeypatch):
+    """create_trace_job MUST post to the platform host's /v1/traces/jobs,
+    NOT to the orchestrator. Both endpoints exist (the orchestrator's
+    /v1/jobs is for eval jobs, not trace grouping), but only the platform
+    host returns a trace job_id the session ingest endpoint accepts."""
+    from envs.fleet_env.trace import create_trace_job
+
+    captured: List[Dict[str, Any]] = []
+    monkeypatch.setattr(
+        "httpx.AsyncClient", lambda timeout=None: _FakeHTTPClient(captured)
+    )
+    # _FakeHTTPClient returns {"session_id": ...} by default; we need
+    # {"job_id": ...} for this endpoint. Patch the response payload.
+    original = _FakeHTTPClient.post
+
+    async def _post_returning_job_id(self, url, json=None, headers=None):
+        self._captured.append({"url": url, "json": json, "headers": headers})
+        return _FakeHTTPResponse({"job_id": "trace-job-abc"})
+
+    monkeypatch.setattr(_FakeHTTPClient, "post", _post_returning_job_id)
+    try:
+        job_id = asyncio.run(create_trace_job(api_key="k", name="my-trace-job"))
+    finally:
+        monkeypatch.setattr(_FakeHTTPClient, "post", original)
+
+    assert job_id == "trace-job-abc"
+    assert len(captured) == 1
+
+    # Host MUST be the platform-internal host. Critical regression pin.
+    assert captured[0]["url"] == (
+        "https://api.internal.fleet-platform.fleetai.com/v1/traces/jobs"
+    )
+    assert captured[0]["json"] == {"name": "my-trace-job"}
+    assert captured[0]["headers"]["Authorization"] == "Bearer k"
+
+
+def test_create_trace_job_uses_different_host_than_upload(monkeypatch):
+    """Explicit pin: create_trace_job and upload_trace target DIFFERENT
+    hosts (platform vs orchestrator). The previous bug collapsed them."""
+    from envs.fleet_env.trace import (
+        _FLEET_SESSION_INGEST_HOST,
+        _FLEET_TRACE_JOBS_HOST,
+    )
+    assert _FLEET_TRACE_JOBS_HOST != _FLEET_SESSION_INGEST_HOST
+    assert _FLEET_TRACE_JOBS_HOST == (
+        "https://api.internal.fleet-platform.fleetai.com"
+    )
+    assert _FLEET_SESSION_INGEST_HOST == "https://orchestrator.fleetai.com"
 
 
 def test_upload_trace_returns_none_on_exception(monkeypatch):
