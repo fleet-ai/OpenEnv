@@ -299,7 +299,17 @@ async def upload_trace(
                 messages.append(entry)
                 pending_tool_call_id = None  # consumed by this tool result
             else:
-                messages.append({"role": role, "content": content})
+                # Preserve `tool_calls` on assistant messages so the Fleet
+                # trace viewer can link each tool result back to the call
+                # that produced it (viewer keys off tool_calls[0].id matching
+                # the next tool message's tool_call_id). Without this the
+                # viewer shows Tool Calls=0 and screenshots render only
+                # inside the JSON tree instead of the top-of-session preview.
+                # A/B verified via dummy-job probe 2026-06-21.
+                out: Dict[str, Any] = {"role": role, "content": content}
+                if role == "assistant" and msg.get("tool_calls"):
+                    out["tool_calls"] = msg["tool_calls"]
+                messages.append(out)
 
         payload: Dict[str, Any] = {
             "messages": messages,

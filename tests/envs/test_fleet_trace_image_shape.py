@@ -549,3 +549,127 @@ def test_upload_trace_returns_none_on_exception(monkeypatch):
         model="m", chat_history=[], reward=0.0,
     ))
     assert result is None
+
+
+# --------------------------------------------------------------------------- #
+# tool_calls forwarding — Fleet trace viewer linkage
+# --------------------------------------------------------------------------- #
+
+def test_upload_trace_forwards_assistant_tool_calls(monkeypatch):
+    """The Fleet trace viewer keys off `assistant.tool_calls[0].id`
+    matching the next tool message's `tool_call_id` to link a screenshot
+    back to the call that produced it. _assemble_messages must preserve
+    `tool_calls` on the assistant when forwarding to /v1/sessions/ingest;
+    dropping it (which the pre-fix version did) made the viewer show
+    Tool Calls=0 and render screenshots only inside the JSON tree.
+
+    A/B verified 2026-06-21 via dummy-job probe: identical session
+    content with tool_calls set renders the screenshot top-level; the
+    same content without it doesn't."""
+    captured: List[Dict[str, Any]] = []
+    monkeypatch.setattr(
+        "envs.fleet_env.trace._upload_image_to_public_bucket",
+        lambda b, m: "https://fleet-sessions-images.s3.us-east-1.amazonaws.com/x.png",
+    )
+    monkeypatch.setattr(
+        "httpx.AsyncClient", lambda timeout=None: _FakeHTTPClient(captured)
+    )
+
+    history = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "do a thing"},
+        {
+            "role": "assistant",
+            "content": "calling computer screenshot",
+            # The skyrl-fleet env.py:step_async sets this after a
+            # successful parse_tool_call. Must round-trip through upload.
+            "tool_calls": [{
+                "id": "call_1",
+                "type": "function",
+                "function": {
+                    "name": "computer",
+                    "arguments": '{"action": "screenshot"}',
+                },
+            }],
+        },
+        {
+            "role": "user",
+            "content": [
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="}},
+            ],
+        },
+    ]
+
+    asyncio.run(upload_trace(
+        api_key="k", job_id="job-1", task_key="task-1", model="kimi-k2.6",
+        chat_history=history, reward=0.0,
+    ))
+    msgs = captured[0]["json"]["messages"]
+
+    # Find the assistant message — tool_calls must round-trip verbatim.
+    asst = next(m for m in msgs if m.get("role") == "assistant")
+    assert "tool_calls" in asst, (
+        "assistant tool_calls dropped on upload — viewer will show Tool Calls=0 "
+        "and screenshots won't render top-of-session"
+    )
+    assert asst["tool_calls"][0]["id"] == "call_1"
+    assert asst["tool_calls"][0]["function"]["name"] == "computer"
+
+    # The next tool message must bind to the assistant's call_id (this is
+    # the linkage that the viewer renders top-level on).
+    tool_msg = next(m for m in msgs if m.get("role") == "tool")
+    assert tool_msg.get("tool_call_id") == "call_1"
+
+
+def test_upload_trace_no_tool_calls_field_on_non_assistant(monkeypatch):
+    """tool_calls is an assistant-only field. Don't accidentally promote
+    it onto system/user/tool messages even if the source dict carries it."""
+    captured: List[Dict[str, Any]] = []
+    monkeypatch.setattr(
+        "envs.fleet_env.trace._upload_image_to_public_bucket",
+        lambda b, m: "https://fleet-sessions-images.s3.us-east-1.amazonaws.com/x.png",
+    )
+    monkeypatch.setattr(
+        "httpx.AsyncClient", lambda timeout=None: _FakeHTTPClient(captured)
+    )
+
+    history = [
+        # Defensive: pretend something set tool_calls on a system message.
+        # Must NOT be forwarded — assistant-only contract.
+        {"role": "system", "content": "sys", "tool_calls": [{"id": "x"}]},
+        {"role": "user", "content": "task"},
+    ]
+    asyncio.run(upload_trace(
+        api_key="k", job_id="j", task_key="t", model="m",
+        chat_history=history, reward=0.0,
+    ))
+    msgs = captured[0]["json"]["messages"]
+    sys = next(m for m in msgs if m.get("role") == "system")
+    assert "tool_calls" not in sys
+
+
+def test_upload_trace_no_tool_calls_field_when_assistant_has_none(monkeypatch):
+    """Forwarder must NOT add an empty tool_calls list. Empty list could
+    still confuse the viewer's linkage; absence is the right signal for
+    'this turn had no parseable call'."""
+    captured: List[Dict[str, Any]] = []
+    monkeypatch.setattr(
+        "envs.fleet_env.trace._upload_image_to_public_bucket",
+        lambda b, m: "https://fleet-sessions-images.s3.us-east-1.amazonaws.com/x.png",
+    )
+    monkeypatch.setattr(
+        "httpx.AsyncClient", lambda timeout=None: _FakeHTTPClient(captured)
+    )
+
+    history = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "task"},
+        # No tool_calls on assistant — parser failed for this turn
+        {"role": "assistant", "content": "plain text, no parseable call"},
+    ]
+    asyncio.run(upload_trace(
+        api_key="k", job_id="j", task_key="t", model="m",
+        chat_history=history, reward=0.0,
+    ))
+    asst = next(m for m in captured[0]["json"]["messages"] if m.get("role") == "assistant")
+    assert "tool_calls" not in asst
