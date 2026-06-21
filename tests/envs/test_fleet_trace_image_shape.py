@@ -136,6 +136,66 @@ def test_data_url_block_rewritten_to_https(fake_upload):
     assert fake_upload[0]["mime"] == "image/jpeg"
 
 
+def test_turn_footer_block_stripped_from_multimodal_upload(fake_upload):
+    """The env appends `{"type":"text","text":"[Turn 3/64]"}` to every
+    multimodal observation so the model knows its trajectory position.
+    The model SHOULD see it; the Fleet UI should NOT — when the content
+    array carries [image_url, footer-text], the dashboard renders both as
+    siblings of a JSON tree, nesting the screenshot. Stripping the footer
+    at upload time lets the UI render the screenshot as primary content."""
+    history = [{
+        "role": "tool",
+        "content": [
+            {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,/9j/4AAQ"}},
+            {"type": "text", "text": "[Turn 3/64]"},
+        ],
+    }]
+    out = asyncio.run(_rewrite_chat_history(history))
+    blocks = out[0]["content"]
+    # The footer text block must be gone.
+    assert len(blocks) == 1, f"expected only the image_url block, got {blocks}"
+    assert blocks[0]["type"] == "image_url"
+
+
+def test_turn_footer_pattern_matches_variations(fake_upload):
+    """Match `[Turn N/M]` with surrounding whitespace and across plausible
+    spacing variants. The env strips its own leading newline before adding
+    the block, but be robust against future env tweaks."""
+    history = [{
+        "role": "tool",
+        "content": [
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw"}},
+            {"type": "text", "text": "  [Turn 12/64]  "},   # padded
+            {"type": "text", "text": "[Turn 64 / 64]"},      # extra spaces inside
+            {"type": "text", "text": "[Turn 1/64]\n"},        # trailing newline
+        ],
+    }]
+    out = asyncio.run(_rewrite_chat_history(history))
+    blocks = out[0]["content"]
+    assert len(blocks) == 1
+    assert blocks[0]["type"] == "image_url"
+
+
+def test_non_footer_text_block_preserved(fake_upload):
+    """Text blocks that AREN'T the turn footer must survive the upload.
+    Example: tool result with text + screenshot."""
+    history = [{
+        "role": "tool",
+        "content": [
+            {"type": "text", "text": "search returned 12 results"},
+            {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,/9j/4"}},
+            {"type": "text", "text": "[Turn 5/64]"},
+        ],
+    }]
+    out = asyncio.run(_rewrite_chat_history(history))
+    blocks = out[0]["content"]
+    # Footer stripped, search-result text kept.
+    assert len(blocks) == 2
+    text_blocks = [b for b in blocks if b.get("type") == "text"]
+    assert len(text_blocks) == 1
+    assert "search returned" in text_blocks[0]["text"]
+
+
 def test_already_https_url_not_re_uploaded(fake_upload):
     """If a previous turn already swapped to HTTPS (because the same
     screenshot was uploaded earlier in the session), don't double-upload."""

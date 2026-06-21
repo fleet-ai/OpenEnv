@@ -45,6 +45,7 @@ import base64
 import hashlib
 import logging
 import os
+import re
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -163,10 +164,28 @@ def _rewrite_block_with_https_image(block: Dict[str, Any]) -> Dict[str, Any]:
     return {"type": "image_url", "image_url": {"url": https}}
 
 
+# `[Turn 3/64]` style footers the env appends to every observation. The
+# model SHOULD see them (cheap trajectory-position context, no cost), but
+# they clutter the Fleet UI's session viewer — when a multimodal content
+# array carries [image_url, text("[Turn N/M]")], the viewer renders both
+# items as siblings of an array, which nests the screenshot inside a JSON
+# tree view instead of showing it as primary content. Strip the footer
+# from the UI upload only.
+_TURN_FOOTER_RE = re.compile(r"^\s*\[Turn\s+\d+\s*/\s*\d+\]\s*$")
+
+
+def _is_turn_footer_block(block: Any) -> bool:
+    if not isinstance(block, dict) or block.get("type") != "text":
+        return False
+    text = block.get("text", "")
+    return bool(_TURN_FOOTER_RE.match(text or ""))
+
+
 async def _rewrite_chat_history(
     chat_history: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
-    """Walk every message; replace base64 image_url blocks with HTTPS URLs.
+    """Walk every message; replace base64 image_url blocks with HTTPS URLs
+    and strip `[Turn N/M]` footer text blocks from multimodal arrays.
 
     S3 puts run in a thread pool so we don't block the event loop. Identical
     screenshots within a session dedup at the S3 key level.
@@ -175,8 +194,14 @@ async def _rewrite_chat_history(
     for msg in chat_history:
         c = msg.get("content")
         if isinstance(c, list):
+            # Drop trailing turn-footer text blocks BEFORE the image-URL
+            # rewrite so we don't pay an S3 head_object for them. The env
+            # appends the footer at the end of the multimodal array; drop
+            # any text block matching the [Turn N/M] pattern regardless of
+            # position to be robust against future env changes.
+            filtered = [b for b in c if not _is_turn_footer_block(b)]
             new_blocks = await asyncio.gather(*[
-                asyncio.to_thread(_rewrite_block_with_https_image, b) for b in c
+                asyncio.to_thread(_rewrite_block_with_https_image, b) for b in filtered
             ])
             new_msg = dict(msg)
             new_msg["content"] = list(new_blocks)
