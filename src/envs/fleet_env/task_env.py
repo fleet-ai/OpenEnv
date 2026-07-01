@@ -17,6 +17,17 @@ from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
+
+def _verifier_accepts_conversation(verifier_code: str) -> bool:
+    """True if the verifier's verify() signature declares a `conversation` param.
+
+    That parameter is the signal that the verifier grades the transcript
+    (observable actions + produced artifacts), not just a submitted final
+    answer, so the harness should hand it the conversation.
+    """
+    match = re.search(r"def\s+verify\s*\(([^)]*)\)", verifier_code or "", re.DOTALL)
+    return bool(match) and "conversation" in match.group(1)
+
 # Retry the verifier when the env-instance reverse proxy returns 502/503 on a
 # fresh instance. 3 attempts with exponential backoff (3s, 6s) covers the warmup.
 _VERIFY_MAX_ATTEMPTS = 3
@@ -167,6 +178,10 @@ class FleetTaskEnv:
         self._reward_computed = False
         self.final_reward: Optional[float] = None
         self._submitted_answer: Optional[str] = None
+        # Full transcript for the verifier, set by the caller (the skyrl-gym
+        # wrapper owns chat_history). Passed to verifiers whose signature
+        # accepts `conversation`; see _compute_reward.
+        self.conversation_messages: Optional[List[Dict[str, Any]]] = None
         self._browser_lease = None  # BrowserLeaseResult for browser_use
 
         # Feedback for hint generation (accumulated during rollout)
@@ -803,13 +818,21 @@ class FleetTaskEnv:
                         verifier_func=verifier_code,
                     )
 
-                    # Pass final_answer when model used submit_final_answer.
-                    # We intentionally do NOT pass `conversation` — verifiers
-                    # that fall back to the last assistant msg would grade tool
-                    # calls as "answers". Model must submit explicitly.
+                    # Pass final_answer when the model used submit_final_answer.
                     verify_kwargs = {}
                     if self._submitted_answer is not None:
                         verify_kwargs["final_answer"] = self._submitted_answer
+                    # Judge-style verifiers grade observable actions + produced
+                    # artifacts from the transcript, not just a submitted answer.
+                    # Hand them the conversation when (a) the caller provided it
+                    # and (b) the verifier's signature declares a `conversation`
+                    # param. Verifiers without that param (submit-answer-only)
+                    # are unaffected, so this can't turn tool calls into answers.
+                    if self.conversation_messages and _verifier_accepts_conversation(verifier_code):
+                        import json
+                        verify_kwargs["conversation"] = json.dumps(
+                            self.conversation_messages, default=str
+                        )
 
                     # Retry on transient env-instance reverse-proxy errors
                     # (502/503 on a fresh instance before it has fully warmed
