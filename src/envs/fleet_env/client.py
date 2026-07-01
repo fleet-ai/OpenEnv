@@ -148,11 +148,15 @@ class FleetEnvClient(HTTPEnvClient[Action, Observation]):
         root = env.urls.root
         # Pick MCP endpoint based on modality:
         # - computer_use: aggregator on port 8081 (has computer tool + API tools)
-        # - tool_use: per-env MCP server on port 3003 (API tools only)
+        # - tool_use: per-env MCP server on port 3003 (API tools only), BUT some
+        #   tool_use env images only expose the aggregator at api/v1/mcp (e.g.
+        #   forums-homes-bash), so try both. FleetMCPTools unions tools across
+        #   endpoints and tolerates a per-endpoint 404, so whichever the image
+        #   actually serves wins; call routing is cached per tool afterward.
         if image_type == "mcp":
             mcp_urls = (f"{root}api/v1/mcp",)
         else:
-            mcp_urls = (f"{root}mcp",)
+            mcp_urls = (f"{root}mcp", f"{root}api/v1/mcp")
 
         orch = cls(
             base_url=env.urls.manager.api,
@@ -286,8 +290,11 @@ class FleetEnvClient(HTTPEnvClient[Action, Observation]):
             # computer_use: aggregator on port 8081 (has computer tool + API tools)
             mcp_urls = (f"{root}api/v1/mcp",)
         else:
-            # tool_use: per-env MCP server on port 3003 (API tools only)
-            mcp_urls = (f"{root}mcp",)
+            # tool_use: per-env MCP server on port 3003 (API tools only), plus the
+            # aggregator (api/v1/mcp) as a fallback — some tool_use env images
+            # (e.g. forums-homes-bash) only serve MCP there. FleetMCPTools unions
+            # across endpoints and tolerates a per-endpoint 404.
+            mcp_urls = (f"{root}mcp", f"{root}api/v1/mcp")
 
         orch = cls(
             base_url=env.urls.manager.api,
