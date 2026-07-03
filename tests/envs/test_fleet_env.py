@@ -152,6 +152,41 @@ async def test_agent_tools_list_and_call_routes(monkeypatch):
     assert res["url"].endswith("api/v1/mcp")
 
 
+@pytest.mark.anyio
+async def test_call_tool_stops_retrying_at_deadline(monkeypatch):
+    """A persistently failing tool must exhaust the wall-clock deadline, not
+    the full retry count — otherwise one dead tool call outlives any harness
+    step budget and kills the whole rollout."""
+    from envs.fleet_env.mcp_tools import FleetMCPTools
+
+    attempts = []
+
+    class _AlwaysFailing:
+        def __init__(self, url, api_key):
+            self.url = url
+
+        async def list_tools(self):
+            return []
+
+        async def call_tool(self, name, args):
+            attempts.append(name)
+            raise RuntimeError("tool is down")
+
+        def has_tool(self, name, tools_list=None):
+            return True
+
+    monkeypatch.setattr("envs.fleet_env.mcp_tools.FleetMCPTools._get_owner_cache",
+                        lambda self: {"broken": _AlwaysFailing("https://x/mcp", "k")})
+    monkeypatch.setattr("envs.fleet_env.mcp_tools.FleetMCPClient", _AlwaysFailing)
+
+    # Deadline shorter than the first backoff: attempt 0 runs, then the loop
+    # must give up instead of sleeping past the budget.
+    tools = FleetMCPTools(api_key="k", mcp_urls=("https://x/mcp",), call_deadline_s=0.5)
+    with pytest.raises(RuntimeError):
+        await tools.call_tool("broken", {})
+    assert len(attempts) < tools.max_retries
+
+
 class TestFleetMCPClientExtractToolResult:
     """Tests for FleetMCPClient._extract_tool_result()."""
 

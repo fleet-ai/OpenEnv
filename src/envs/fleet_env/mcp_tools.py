@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -41,6 +43,16 @@ class FleetMCPTools:
     max_retries: int = 8
     initial_wait: float = 8.0
     max_backoff: float = 5.0
+    # Total wall-clock budget for one call_tool INCLUDING retries. Harness
+    # step timeouts (e.g. main_fleet_tinker's ENV_STEP_TIMEOUT_S) kill the
+    # whole rollout when a single env step overruns; retrying a dead tool for
+    # max_retries * OPERATION_TIMEOUT_S guarantees that overrun. Exhausting
+    # this deadline surfaces the failure to the model as a tool error (the
+    # env's tool_call_failed path) instead, and the rollout continues.
+    # list_tools (reset) is intentionally NOT deadline-capped.
+    call_deadline_s: float = field(
+        default_factory=lambda: float(os.getenv("FLEET_CALL_TOOL_DEADLINE_S", "90"))
+    )
     _clients: Optional[List[FleetMCPClient]] = field(default=None, repr=False)
     _tool_owner: Optional[Dict[str, FleetMCPClient]] = field(default=None, repr=False)
 
@@ -172,13 +184,25 @@ class FleetMCPTools:
     async def call_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Any:
         """Call a tool with retry logic for connection failures.
 
-        Retries with exponential backoff on connection errors.
+        Retries with exponential backoff on connection errors, bounded by
+        ``call_deadline_s`` of total wall-clock (attempt 0 always runs; a
+        near-deadline attempt gets only the remaining budget).
         """
         last_error = None
+        deadline = time.monotonic() + self.call_deadline_s
 
         for attempt in range(self.max_retries):
+            remaining = deadline - time.monotonic()
             try:
-                result = await self._call_tool_single_attempt(tool_name, arguments)
+                # First attempt runs with its client-level cap regardless;
+                # retries are additionally clipped to the remaining budget.
+                if attempt == 0:
+                    result = await self._call_tool_single_attempt(tool_name, arguments)
+                else:
+                    result = await asyncio.wait_for(
+                        self._call_tool_single_attempt(tool_name, arguments),
+                        timeout=max(remaining, 1.0),
+                    )
                 if attempt > 0:
                     logger.info(f"call_tool({tool_name}) succeeded on attempt {attempt + 1}")
                 return result
@@ -188,8 +212,9 @@ class FleetMCPTools:
             except Exception as e:
                 last_error = e
                 error_msg = _unwrap_exception(e)
-                if attempt < self.max_retries - 1:
-                    delay = min(2 ** attempt, self.max_backoff)
+                delay = min(2 ** attempt, self.max_backoff)
+                out_of_budget = (deadline - time.monotonic() - delay) <= 0
+                if attempt < self.max_retries - 1 and not out_of_budget:
                     logger.warning(
                         f"call_tool({tool_name}) attempt {attempt + 1}/{self.max_retries} failed: {error_msg}. "
                         f"Retrying in {delay:.1f}s..."
@@ -202,6 +227,12 @@ class FleetMCPTools:
                         error_message=error_msg,
                     )
                     await asyncio.sleep(delay)
+                elif out_of_budget and attempt < self.max_retries - 1:
+                    logger.warning(
+                        f"call_tool({tool_name}) giving up after attempt {attempt + 1}: "
+                        f"{self.call_deadline_s:.0f}s retry deadline exhausted ({error_msg})"
+                    )
+                    break
 
         logger.error(
             f"call_tool({tool_name}) failed after {self.max_retries} attempts: {_unwrap_exception(last_error)}"
