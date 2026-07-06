@@ -30,7 +30,7 @@ def _verifier_accepts_conversation(verifier_code: str) -> bool:
 
 # Retry the verifier when the env-instance reverse proxy returns 502/503 on a
 # fresh instance. 3 attempts with exponential backoff (3s, 6s) covers the warmup.
-_VERIFY_MAX_ATTEMPTS = 3
+_VERIFY_MAX_ATTEMPTS = 4
 _VERIFY_BACKOFF_S = 3.0
 
 from .client import FleetEnvClient
@@ -842,16 +842,21 @@ class FleetTaskEnv:
                     for attempt in range(_VERIFY_MAX_ATTEMPTS):
                         response = await fleet_task.verify_detailed_async(fleet_env, **verify_kwargs)
                         err_msg = (response.error or {}).get("message", "") if response.error else ""
-                        is_transient = (
-                            not response.success
-                            and ("502" in err_msg or "503" in err_msg or "Bad Gateway" in err_msg or "timeout" in err_msg.lower())
-                        )
-                        if not is_transient:
+                        # ANY unsuccessful execution retries, not just proxy
+                        # 502/503s: a regrade census (2026-07-07) found 23% of
+                        # zero-reward rollouts were verifier-execution failures
+                        # scored as 0.0 — including stable full passes — and
+                        # most carried non-proxy errors ("Verifier failed:
+                        # result=None") or none at all. A false zero poisons
+                        # its whole GRPO group's advantages, so retrying too
+                        # much is far cheaper than retrying too little.
+                        is_retryable = not response.success
+                        if not is_retryable:
                             break
                         if attempt < _VERIFY_MAX_ATTEMPTS - 1:
                             backoff = _VERIFY_BACKOFF_S * (2 ** attempt)
                             logger.warning(
-                                f"Task {self.task_key}: verifier transient error (attempt {attempt + 1}/{_VERIFY_MAX_ATTEMPTS}): {err_msg[:200]}. Retrying in {backoff}s..."
+                                f"Task {self.task_key}: verifier execution failed (attempt {attempt + 1}/{_VERIFY_MAX_ATTEMPTS}): {err_msg[:200]}. Retrying in {backoff}s..."
                             )
                             await asyncio.sleep(backoff)
 
