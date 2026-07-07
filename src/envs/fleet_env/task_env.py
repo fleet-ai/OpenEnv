@@ -771,14 +771,16 @@ class FleetTaskEnv:
         """Accumulated tool error messages from this rollout."""
         return self._tool_errors.copy()
 
-    async def _compute_reward(self) -> float:
+    async def _compute_reward(self) -> "Optional[float]":
         """Compute reward by executing the verifier using Fleet SDK.
 
         Uses Fleet SDK's Task.verify_detailed() which properly sets up the
         verifier namespace with Environment type, helper functions, etc.
 
         Returns:
-            1.0 if verifier passes, 0.0 otherwise (or partial if enabled)
+            1.0 if verifier passes, 0.0 if it grades a failure (or partial if
+            enabled). None when the verifier EXECUTION failed after retries —
+            the grade is unknown and callers must exclude, not punish.
         """
         # Support both field names: verifier_code (OpenEnv) and verifier_func (Fleet SDK)
         verifier_code = self.task.get("verifier_code") or self.task.get("verifier_func")
@@ -868,8 +870,13 @@ class FleetTaskEnv:
                         # Verifier succeeded but returned None - treat as success
                         score = 1.0
                     else:
-                        # Verifier failed (exception or explicit failure)
-                        score = 0.0
+                        # Verifier EXECUTION failed after retries: the grade is
+                        # unknown, not zero. A regrade census found 23% of
+                        # zero-scored rollouts were execution failures (some
+                        # were stable full passes); scoring them 0.0 poisons
+                        # GRPO group advantages and depresses evals. None lets
+                        # callers exclude the rollout instead of punishing it.
+                        score = None
 
                     verifier_success = response.success
 
@@ -918,6 +925,7 @@ class FleetTaskEnv:
                     logger.error(f"Fleet SDK not available for verifier execution: {e}")
                     failure_reason = "import_error"
                     self._verifier_error = f"ImportError: {e}"
+                    score = None
                 except Exception as e:
                     logger.error(
                         f"Verifier execution failed for task {self.task_key}: {e}\n"
@@ -932,6 +940,7 @@ class FleetTaskEnv:
                     )
                     failure_reason = "verifier_exception"
                     self._verifier_error = f"Verifier exception: {e}"
+                    score = None
 
         # Always emit rollout completed event
         fleet_info(
