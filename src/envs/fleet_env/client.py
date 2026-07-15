@@ -26,6 +26,30 @@ from .mcp_tools import FleetMCPTools
 from .models import CallToolAction, ListToolsAction
 from .telemetry import fleet_error, fleet_warning, fleet_info
 
+# Substrings identifying instance-creation failures that are safe to retry.
+# Beyond generic network blips, Fleet's Driver API explicitly marks transient
+# rejections with "retryable": true in the error body (observed:
+# seed_placement_failed/indexer_unreachable during the Jul 14-15 incidents),
+# and burst-level throttles ("Too many in-flight instance creations",
+# "Rate limit exceeded") clear on their own within seconds. All markers are
+# matched case-insensitively against the stringified exception.
+_TRANSIENT_MAKE_ERROR_MARKERS = (
+    "health check",
+    "timeout",
+    "connection",
+    "temporarily",
+    '"retryable": true',
+    '"retryable":true',
+    "rate limit",
+    "too many in-flight",
+)
+
+
+def _is_transient_make_error(error_msg: str) -> bool:
+    """True when a Fleet make() failure is worth retrying with backoff."""
+    lowered = error_msg.lower()
+    return any(marker in lowered for marker in _TRANSIENT_MAKE_ERROR_MARKERS)
+
 
 class FleetEnvClient(HTTPEnvClient[Action, Observation]):
     """Orchestrator-facing client for Fleet-hosted environments (HTTP only)."""
@@ -89,8 +113,8 @@ class FleetEnvClient(HTTPEnvClient[Action, Observation]):
         start = time.time()
 
         # Retry logic for transient Fleet API failures (e.g., health check failures)
-        max_retries = 3
-        retry_base_delay = 2.0  # seconds
+        max_retries = 5
+        retry_base_delay = 2.0  # seconds; exponential -> 2+4+8+16 = 30s total backoff
         env = None
 
         for attempt in range(max_retries):
@@ -108,11 +132,7 @@ class FleetEnvClient(HTTPEnvClient[Action, Observation]):
                 break  # Success
             except Exception as e:
                 error_msg = str(e)
-                # Retry on transient errors (health check failures, timeouts, etc.)
-                is_transient = any(
-                    x in error_msg.lower()
-                    for x in ["health check", "timeout", "connection", "temporarily"]
-                )
+                is_transient = _is_transient_make_error(error_msg)
                 if attempt < max_retries - 1 and is_transient:
                     delay = retry_base_delay * (2**attempt)
                     _logger.warning(
@@ -220,8 +240,8 @@ class FleetEnvClient(HTTPEnvClient[Action, Observation]):
         start = time.time()
 
         # Retry logic with async sleep (non-blocking)
-        max_retries = 3
-        retry_base_delay = 2.0  # seconds
+        max_retries = 5
+        retry_base_delay = 2.0  # seconds; exponential -> 2+4+8+16 = 30s total backoff
         env = None
 
         # Fleet SDK expects image_type=None for standard images
@@ -240,11 +260,7 @@ class FleetEnvClient(HTTPEnvClient[Action, Observation]):
                 break  # Success
             except Exception as e:
                 error_msg = str(e)
-                # Retry on transient errors (health check failures, timeouts, etc.)
-                is_transient = any(
-                    x in error_msg.lower()
-                    for x in ["health check", "timeout", "connection", "temporarily"]
-                )
+                is_transient = _is_transient_make_error(error_msg)
                 if attempt < max_retries - 1 and is_transient:
                     delay = retry_base_delay * (2**attempt)
                     _logger.warning(
