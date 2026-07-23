@@ -584,3 +584,43 @@ class TestSubmitFinalAnswer:
         await env.step_async(action)
 
         mock_tools.call_tool.assert_not_called()
+
+
+class TestJudgeFailedDetection:
+    """A verifier execution can "succeed" while its LLM judge errored; the
+    wrapper prints `JUDGE ERROR:` at line start and fabricates an all-zero
+    grade. _judge_failed must catch exactly that shape."""
+
+    def _resp(self, stdout):
+        r = MagicMock()
+        r.stdout = stdout
+        return r
+
+    def test_detects_judge_error_line(self):
+        from envs.fleet_env.task_env import _judge_failed
+
+        stdout = (
+            "[C] No images provided\n"
+            "JUDGE ERROR: LLM call failed: Error code: 400 - {'type': 'error', "
+            "'error': {'message': 'You have reached your specified workspace API usage limits.'}}\n"
+            '>>> GRADING_DETAILS >>>\n{"total_score": 0.0, "max_score": 1.0}\n<<< GRADING_DETAILS <<<'
+        )
+        assert _judge_failed(self._resp(stdout)) is True
+
+    def test_healthy_grade_not_flagged(self):
+        from envs.fleet_env.task_env import _judge_failed
+
+        stdout = "[C] Calling judge (standard mode, model=default)\n[C] Score: 5.0/10.0 (0.50)"
+        assert _judge_failed(self._resp(stdout)) is False
+
+    def test_midline_mention_not_flagged(self):
+        from envs.fleet_env.task_env import _judge_failed
+
+        stdout = "[C] Criterion quoted agent text containing JUDGE ERROR: something\n[C] Score: 1.0"
+        assert _judge_failed(self._resp(stdout)) is False
+
+    def test_empty_and_missing_stdout(self):
+        from envs.fleet_env.task_env import _judge_failed
+
+        assert _judge_failed(self._resp("")) is False
+        assert _judge_failed(self._resp(None)) is False

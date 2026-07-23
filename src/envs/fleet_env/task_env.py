@@ -69,6 +69,19 @@ SUBMIT_FINAL_ANSWER_TOOL = {
 }
 
 
+# Printed at line start by the platform's judge wrapper when the LLM judge
+# call inside a verifier errors (rate limit, workspace cap, timeout). The
+# wrapper then fabricates an all-zero GRADING_DETAILS block, so the returned
+# score is not a real grade.
+_JUDGE_ERROR_RE = re.compile(r"^JUDGE ERROR:", re.MULTILINE)
+
+
+def _judge_failed(response: Any) -> bool:
+    """True when a verifier execution "succeeded" but its LLM judge errored."""
+    stdout = getattr(response, "stdout", None)
+    return bool(stdout) and _JUDGE_ERROR_RE.search(stdout) is not None
+
+
 def _is_tool_error(result: Any) -> Tuple[bool, Optional[str]]:
     """Check if a tool result indicates an error.
 
@@ -852,7 +865,12 @@ class FleetTaskEnv:
                         # result=None") or none at all. A false zero poisons
                         # its whole GRPO group's advantages, so retrying too
                         # much is far cheaper than retrying too little.
-                        is_retryable = not response.success
+                        # A judge-backed verifier can "succeed" while its LLM
+                        # judge call failed (rate limit / workspace cap): the
+                        # judge wrapper prints `JUDGE ERROR:` and fabricates an
+                        # all-zero grade. Retry those too — brownouts are often
+                        # intermittent and a retry recovers the real grade.
+                        is_retryable = not response.success or _judge_failed(response)
                         if not is_retryable:
                             break
                         if attempt < _VERIFY_MAX_ATTEMPTS - 1:
@@ -864,7 +882,15 @@ class FleetTaskEnv:
 
                     # Extract result from response
                     # response.success is bool, response.result is the verifier's return value (0.0 or 1.0)
-                    if response.success and response.result is not None:
+                    if response.success and _judge_failed(response):
+                        # Execution succeeded but the LLM judge inside the
+                        # verifier errored, so the returned grade is fabricated
+                        # (all-zero rubric). Same rationale as the execution-
+                        # failure branch below: the grade is unknown, not zero.
+                        score = None
+                        failure_reason = "judge_error"
+                        self._verifier_error = "Verifier failed: judge LLM call errored (grade unknown)"
+                    elif response.success and response.result is not None:
                         score = float(response.result)
                     elif response.success:
                         # Verifier succeeded but returned None - treat as success
